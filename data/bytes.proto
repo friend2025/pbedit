@@ -1,0 +1,3 @@
+message M {
+ bytes s1=1;
+}

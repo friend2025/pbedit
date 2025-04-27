@@ -1,0 +1,113 @@
+
+syntax = "proto3";
+
+message Item {
+  repeated int32 i1 = 1;
+}
+
+message Folder {
+  repeated Item i1 = 1;
+}
+
+message TopMessage {
+    Folder ff00 = 0;
+    Folder ff01 = 1;
+    Folder ff02 = 2;
+    Folder ff03 = 3;
+    Folder ff04 = 4;
+    Folder ff05 = 5;
+    Folder ff06 = 6;
+    Folder ff07 = 7;
+    Folder ff08 = 8;
+    Folder ff09 = 9;
+    Folder ff10 = 10;
+    Folder ff11 = 11;
+    Folder ff12 = 12;
+    Folder ff13 = 13;
+    Folder ff14 = 14;
+    Folder ff15 = 15;
+    Folder ff16 = 16;
+    Folder ff17 = 17;
+    Folder ff18 = 18;
+    Folder ff19 = 19;
+    Folder ff20 = 20;
+    Folder ff21 = 21;
+    Folder ff22 = 22;
+    Folder ff23 = 23;
+    Folder ff24 = 24;
+    Folder ff25 = 25;
+    Folder ff26 = 26;
+    Folder ff27 = 27;
+    Folder ff28 = 28;
+    Folder ff29 = 29;
+    Folder ff30 = 30;
+    Folder ff31 = 31;
+    Folder ff32 = 32;
+    Folder ff33 = 33;
+    Folder ff34 = 34;
+    Folder ff35 = 35;
+    Folder ff36 = 36;
+    Folder ff37 = 37;
+    Folder ff38 = 38;
+    Folder ff39 = 39;
+    Folder ff40 = 40;
+    Folder ff41 = 41;
+    Folder ff42 = 42;
+    Folder ff43 = 43;
+    Folder ff44 = 44;
+    Folder ff45 = 45;
+    Folder ff46 = 46;
+    Folder ff47 = 47;
+    Folder ff48 = 48;
+    Folder ff49 = 49;
+    Folder ff50 = 50;
+    Folder ff51 = 51;
+    Folder ff52 = 52;
+    Folder ff53 = 53;
+    Folder ff54 = 54;
+    Folder ff55 = 55;
+    Folder ff56 = 56;
+    Folder ff57 = 57;
+    Folder ff58 = 58;
+    Folder ff59 = 59;
+    Folder ff60 = 60;
+    Folder ff61 = 61;
+    Folder ff62 = 62;
+    Folder ff63 = 63;
+    Folder ff64 = 64;
+    Folder ff65 = 65;
+    Folder ff66 = 66;
+    Folder ff67 = 67;
+    Folder ff68 = 68;
+    Folder ff69 = 69;
+    Folder ff70 = 70;
+    Folder ff71 = 71;
+    Folder ff72 = 72;
+    Folder ff73 = 73;
+    Folder ff74 = 74;
+    Folder ff75 = 75;
+    Folder ff76 = 76;
+    Folder ff77 = 77;
+    Folder ff78 = 78;
+    Folder ff79 = 79;
+    Folder ff80 = 80;
+    Folder ff81 = 81;
+    Folder ff82 = 82;
+    Folder ff83 = 83;
+    Folder ff84 = 84;
+    Folder ff85 = 85;
+    Folder ff86 = 86;
+    Folder ff87 = 87;
+    Folder ff88 = 88;
+    Folder ff89 = 89;
+    Folder ff90 = 90;
+    Folder ff91 = 91;
+    Folder ff92 = 92;
+    Folder ff93 = 93;
+    Folder ff94 = 94;
+    Folder ff95 = 95;
+    Folder ff96 = 96;
+    Folder ff97 = 97;
+    Folder ff98 = 98;
+    Folder ff99 = 99;
+}

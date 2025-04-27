@@ -1,0 +1,29 @@
+
+option = { "option" ~ ws+ ~ name ~ ws* ~ "=" ~ ws* ~ (!";" ~ ANY)* ~ ";" ~ws* }
+
+name = { (ASCII_ALPHA|"_") ~ (ASCII_ALPHANUMERIC|"_")* }
+typename = { (ASCII_ALPHA|"_") ~ (ASCII_ALPHANUMERIC|"_"|".")* }
+integer = { ("-"|"+")? ~ ASCII_DIGIT{1,9} }
+cardinality = { "optional" | "repeated" }
+ws = _{ " " | "\t" | NEWLINE }
+COMMENT = ${ SingleLineComment }
+SingleLineComment = { "//" ~ (!"\n" ~ ANY)* }
+
+mapname = { "map<" ~ ws* ~ name ~ ws* ~ "," ~ ws* ~ typename ~ ws* ~ ">" }
+msg_field = { cardinality? ~ ws* ~ (mapname|typename) ~ ws+ ~ name ~ ws* ~ "=" ~ ws* ~ integer ~ ws* ~ ("[" ~ (ASCII_ALPHANUMERIC|"_"|"="|" ")* ~"]")? ~ ws* ~ ";" ~ ws* }
+reserved = _{ "reserved" ~ (ASCII_ALPHANUMERIC | "," | "\"" | " " | "\t")* ~ ";" ~ ws* }
+one_of = { "oneof" ~ ws+ ~ name ~ ws* ~ "{" ~ ws* ~ msg_field+ ~ "}" ~ ws* }
+message = { "message" ~ ws+ ~ name ~ ws* ~ "{" ~ (ws* ~ (msg_field | reserved | one_of | enum1 | message))* ~ ws* ~ "}" }
+
+enum_field = { name ~ ws* ~ "=" ~ ws* ~ integer ~ ws* ~ ";" ~ ws* }
+enum1 = { "enum" ~ ws+ ~ name ~ ws* ~ "{" ~ (ws* ~ (enum_field | option))+ ~ ws* ~ "}" }
+
+empty_line = _{ (" "|"\t")* ~ NEWLINE }
+others = _{ ("syntax" | "edition" | "package" | "import") ~ (!"\n" ~ ANY)* }
+//syntax = "proto3";
+//import "public"? "myproject/other_protos.proto";
+//package conformance;
+//option java_package = "com.google.protobuf.conformance";
+
+//file = { SOI ~ ((enum1 | message | other_staff)? ~ NEWLINE)* ~ EOI } -- must have empty line at end
+file = { SOI ~ (option | enum1 | message | others | empty_line)* ~ EOI }

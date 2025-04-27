@@ -1,0 +1,3 @@
+message M {
+ string s1=1;
+}

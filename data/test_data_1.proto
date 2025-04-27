@@ -1,0 +1,18 @@
+
+message M {
+ int32 f1 = 1;
+ repeated int32 f2 = 2;
+ M3 m3 = 3; 
+ int32 f4 = 4;
+}
+
+message M3 {
+ int32 f5 = 5;
+ repeated M6 m6 = 6;
+ int32 f7 = 7;
+}
+
+message M6 {
+ int32 f8 = 8;
+ int32 f9 = 9;
+}

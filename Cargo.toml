@@ -1,0 +1,10 @@
+[package]
+name = "editor"
+version = "0.7.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.35", features = ["derive"] }
+crossterm = "0.28.1"
+pest = "2.7.15"
+pest_derive = "2.7.15"
