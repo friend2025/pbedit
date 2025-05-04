@@ -33,7 +33,7 @@ use crossterm::{
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use pest::Lines;
-use crate::proto::{FieldProtoPtr, MessageProto, ProtoData};
+use crate::proto::{FieldProtoPtr, MessageProto, ProtoData, ProtoFile};
 use crate::typedefs::{PbReader};
 use crate::view::UserCommand::{ChangeFieldOrder, CollapsedToggle, DeleteData, End, Home, InsertData, ScrollHorizontally, ScrollSibling, ScrollToBottom, ScrollVertically};
 use crate::wire::FieldValue::SCALAR;
@@ -509,6 +509,10 @@ impl Drop for App {
 struct Args {
     /// Input file: data.pb{;format.proto{;message_name}}
     file: String,
+
+    /// Set of directories for proto files search
+    #[arg(short='I', long="proto_path")]
+    proto_path: Vec<PathBuf>,
 }
 
 fn main() -> io::Result<()> {
@@ -540,31 +544,48 @@ fn main() -> io::Result<()> {
         exit(102);
     }
 
-    let proto = ProtoData::new(&std::fs::read_to_string(proto_file)?)?;
+    for dir in &args.proto_path {
+        if !dir.is_absolute() {
+            eprintln!("The proto_path argument should contain an absolute path.");
+            break;
+        }
+        if !dir.is_dir() {
+            eprintln!("The proto_path is not a directory: {}", dir.display());
+        }
+    }
 
-    let root_msg =
-        if root_message_name.is_empty() {
-            if let Some(root) = proto.auto_detect_root_message() {
-                root
-            } else {
-                eprintln!("Cannot choose the root message in the proto definition file; please provide it manually.");
-                exit(103);
-            }
-        } else {
-            if let Some(root) = proto.get_message_definition(&root_message_name) {
-                root
-            } else {
-                eprintln!("No message \"{}\" found in the proto definition file.", root_message_name);
-                exit(104);
-            }
-        };
+    let mut proto_files = ProtoFile::new_with_imports(proto_file.into(), args.proto_path);
+
+    let mut proto = ProtoData::new(&proto_files.remove(0).content)?;
+
+    let mut root_msg = None;
+    if root_message_name.is_empty() {
+        root_msg = proto.auto_detect_root_message(); // search only in the main proto file
+        if root_msg.is_none() {
+            eprintln!("Cannot choose the root message in the proto definition file; please provide it manually.");
+            exit(103);
+        }
+    }
+
+    // merge imported proto files
+    for file in proto_files.into_iter() {
+        proto.append(ProtoData::new(&file.content)?);
+    }
+    proto = proto.finalize()?;
+
+    if root_msg.is_none() {
+        root_msg = proto.get_message_definition(&root_message_name);
+        if root_msg.is_none() {
+            eprintln!("Root message \"{}\" not found.", root_message_name);
+            exit(104);
+        }
+    }
 
     println!("loading...");
     let file = std::fs::File::open(binary_file)?;
     let mut limit = file.metadata()?.len() as u32;
     let mut reader = PbReader::new(file);
-    let data = MessageData::new(&mut reader, &proto, root_msg, &mut limit)?;
-
+    let data = MessageData::new(&mut reader, &proto, root_msg.unwrap(), &mut limit)?;
 
     App::new(data, binary_file.into())?.run()
 }
@@ -636,9 +657,9 @@ mod app_tests {
 
     fn make_minimal_test_data() -> MessageData {
         let binary_input = [];
-        let proto = ProtoData::new("message M { int32 f1 = 1; }").unwrap();
+        let proto = ProtoData::new("message M { int32 f1 = 1; }").unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap()
     }
@@ -647,7 +668,7 @@ mod app_tests {
         //let binary_input = [];
         //let proto = ProtoData::new(proto).unwrap();
         //let mut limit = binary_input.len() as u32;
-        //let root_msg = proto.root_message();
+        //let root_msg = proto.auto_detect_root_message().unwrap();
         //let mut read = PbReader::new(binary_input.as_slice());
         //let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -661,9 +682,9 @@ mod app_tests {
 
     fn make_no_field_data(proto: &str) -> MessageData {
         let binary_input = [];
-        let proto = ProtoData::new(proto).unwrap();
+        let proto = ProtoData::new(proto).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -697,9 +718,9 @@ message M6 { int32 f8 = 8; int32 f9 = 9; }
             0x38, 7,  //   f7: 7 int32
         ];
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
 
         //        let mut f = std::fs::File::create("test_data_1.pb").unwrap();
@@ -733,9 +754,9 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             //0x18, 7,  //     i3: 7 int32
         ];
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -1000,9 +1021,9 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
         let binary_input = [
             0x0A, 0x03, 0x61, 0x62, 0x63,
             0x0A, 0x03, 0x64, 0x65, 0x66];
-        let proto = ProtoData::new("message M { repeated string f1=1; }").unwrap();
+        let proto = ProtoData::new("message M { repeated string f1=1; }").unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -1019,9 +1040,9 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
         let binary_input = [
             0x0A, 0x02, 0x01, 0x02,
             0x0A, 0x03, 0x03, 0x04, 0x05];
-        let proto = ProtoData::new("message M { repeated bytes f1=1; }").unwrap();
+        let proto = ProtoData::new("message M { repeated bytes f1=1; }").unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -1301,9 +1322,9 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
     #[test]
     fn delete_in_proto_order() {
         let binary_input = [0x08, 0x01, 0x10, 0x02, 0x18, 0x03];
-        let proto = ProtoData::new("message M { int32 f1=1; int32 f2=2; int32 f3=3; }").unwrap();
+        let proto = ProtoData::new("message M { int32 f1=1; int32 f2=2; int32 f3=3; }").unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -1340,9 +1361,9 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
     #[test]
     fn delete_in_wire_order() {
         let binary_input = [0x08, 0x01, 0x10, 0x02, 0x18, 0x03];
-        let proto = ProtoData::new("message M { int32 f1=1; int32 f2=2; int32 f3=3; }").unwrap();
+        let proto = ProtoData::new("message M { int32 f1=1; int32 f2=2; int32 f3=3; }").unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -1569,9 +1590,9 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             0x0A, 2, 0x78, 0x78, //     s1: 2 "xx"
         ];
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -1592,9 +1613,9 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             0x08, 2, //   i1: 2
         ];
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -1615,9 +1636,9 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             0x12, 0, // m4: M4
         ];
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 

@@ -1,6 +1,6 @@
 # pbedit
 
-Editor of [protobuf](https://protobuf.dev) data files.
+Òerminal-based [protobuf](https://protobuf.dev) data files editor.
 
 ## Command Line Interface
 
@@ -37,3 +37,15 @@ Ins - Insert data
 ## Limits
 
 In the current version, the program may slow down with files larger than 10 thousand data items.
+
+## Examples
+
+There are several example data files for testing the application in the 'data' folder.
+Type `editor filename.pb` to open a file.
+
+ * ints.pb - simple integer data example
+ * str.pb - multiline string example
+ * bytes.pb - a field with 1000 random bytes
+ * mega.pb - 1 million random values in three-level structures
+ * test_data_1.pb - simple nested data example
+

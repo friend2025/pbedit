@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::io;
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::str::FromStr;
 use pest::iterators::{Pairs};
 use crate::typedefs::*;
 
@@ -12,6 +14,11 @@ use pest_derive::Parser;
 #[grammar = "pb.pest"]
 pub struct PBParser;
 
+
+pub struct ProtoFile {
+    path: PathBuf,
+    pub content: String,
+}
 
 pub struct ProtoData {
     messages: Vec<MessageProtoPtr>,
@@ -39,16 +46,14 @@ impl ProtoData {
     pub fn new(input: &str) -> io::Result<ProtoData> {
         match PBParser::parse(Rule::file, input) {
             Ok(rules_pairs) => {
-                let mut proto_data = ProtoData::from_pairs(rules_pairs);
-                proto_data.messages.sort_by(|a, b| a.name.cmp(&b.name));
-                proto_data.enums.sort_by(|a, b| a.name.cmp(&b.name));
-                return Ok(proto_data);
+                let proto_data = ProtoData::from_pairs(rules_pairs);
+                Ok(proto_data)
             }
-            Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string()))
         }
     }
 
-    pub(crate) fn auto_detect_root_message(&self) -> Option<MessageProtoPtr> {
+    pub fn auto_detect_root_message(&self) -> Option<MessageProtoPtr> {
 
         // root message cannot be used as a field of another message (but can be himself field)
         let all_msg_names: HashSet<String> = self.messages.iter().map(|m| m.name.clone()).collect();
@@ -59,11 +64,11 @@ impl ProtoData {
         let mut sub_msg_names = vec![];
         for msg in &self.messages {
             for fld in &msg.fields {
-                if fld.is_message() {
+//                if fld.is_message() { // unless the proto data finalized we do not know is it a message
                     if fld.typename() != msg.name {
                         sub_msg_names.push(fld.typename());
                     }
-                }
+//                }
             }
         }
 
@@ -78,9 +83,6 @@ impl ProtoData {
         }
 
         None
-    }
-    pub fn root_message(&self) -> MessageProtoPtr {
-        self.auto_detect_root_message().expect("root message is not selected").clone()
     }
 
     pub fn get_message_definition(&self, name: &str) -> Option<MessageProtoPtr> {
@@ -99,7 +101,7 @@ impl ProtoData {
         }
     }
 
-    fn append(&mut self, mut other: ProtoData) {
+    pub fn append(&mut self, mut other: ProtoData) {
         self.messages.append(&mut other.messages);
         self.enums.append(&mut other.enums);
     }
@@ -245,7 +247,7 @@ impl ProtoData {
         for pair in pairs {
             for inner_pair in pair.into_inner() {
                 match inner_pair.as_rule() {
-                    Rule::file => { return Self::from_pairs(inner_pair.into_inner()); }
+                    //                    Rule::file => { return Self::from_pairs(inner_pair.into_inner()); }
                     Rule::message => {
                         res.append(Self::add_message(inner_pair.into_inner(), comments.clone()));
                         comments.clear();
@@ -265,10 +267,10 @@ impl ProtoData {
                 };
             }
         }
-        res.create_map_messages();
-        res.messages.sort_by(|a, b| a.name.cmp(&b.name));
-        res.enums.sort_by(|a, b| a.name.cmp(&b.name));
-        res.link_user_types();
+        //        res.create_map_messages();
+        //        res.messages.sort_by(|a, b| a.name.cmp(&b.name));
+        //        res.enums.sort_by(|a, b| a.name.cmp(&b.name));
+        //        res.link_user_types();
         res
     }
 
@@ -299,12 +301,31 @@ impl ProtoData {
         }
     }
 
-    fn link_user_types(&mut self) {
+    //    fn link_user_types(&mut self) {
+    //        for msg in &self.messages {
+    //            for field in &msg.fields {
+    //                field.link_user_types(&self.enums, &self.messages);
+    //            }
+    //        }
+    //    }
+
+
+    pub fn finalize(mut self) -> io::Result<ProtoData> {
+        self.create_map_messages();
+        self.messages.sort_by(|a, b| a.name.cmp(&b.name));
+        self.enums.sort_by(|a, b| a.name.cmp(&b.name));
+        //self.link_user_types();
+
         for msg in &self.messages {
             for field in &msg.fields {
                 field.link_user_types(&self.enums, &self.messages);
             }
         }
+
+        // self.messages.sort_by(|a, b| a.name.cmp(&b.name));
+        // self.enums.sort_by(|a, b| a.name.cmp(&b.name));
+
+        Ok(self)
     }
 }
 
@@ -336,7 +357,6 @@ impl Debug for MessageProto {
         //let mut oneof3: Option<String> = None;
 
         for field in &self.fields {
-
             let mut oneof2 = String::new();
             if let Some(ofn) = field.oneof_name() {
                 oneof2 = ofn.clone();
@@ -379,20 +399,154 @@ impl Debug for EnumProto {
     }
 }
 
+
+impl ProtoFile {
+    fn new(path: PathBuf) -> ProtoFile {
+        let content = std::fs::read_to_string(&path).unwrap();
+        ProtoFile { path, content }
+    }
+
+    // https://protobuf.dev/programming-guides/proto3/#importing
+    pub fn new_with_imports(name: PathBuf, proto_path: Vec<PathBuf>) -> Vec<ProtoFile> {
+        let mut all_files = vec![];
+        let mut files: Vec<ProtoFile> = vec![ProtoFile::new(name)];
+        loop {
+            // add children, all for the top level and only public children for others
+            let new_files: Vec<ProtoFile> = files.iter().
+                flat_map(|file| file.read_imports(&proto_path, all_files.is_empty())).
+                collect();
+            all_files.append(&mut files);
+            if new_files.is_empty() { return all_files; }
+
+            // remove files already in the list (circular dependency)
+            files = new_files.into_iter().filter(|new| {
+                all_files.iter().find(|&old| old.path == new.path).is_none()
+            }).collect();
+        }
+    }
+
+    fn extract_imports(&self) -> Vec<(String, bool)> { // (file_name, is_public)
+        let mut res = vec![];
+        for line in self.content.lines() {
+            let lise_string = line.to_string();
+            let s = lise_string.trim();
+            if s.starts_with("import") { // import "file_path.proto";
+                let s = s.trim_end_matches(';');
+                let s = s.trim_start_matches("import");
+                let s = s.trim();
+                let s1 = s.trim_start_matches("public");
+                let is_public = s1.len() != s.len();
+                let s = s1.trim();
+                let s = s.trim_matches('\"');
+                res.push((s.to_string(), is_public));
+            }
+        }
+        res
+    }
+
+    // search file by name in all possible locations
+    fn resolve_path(&self, name: &str, proto_path: &Vec<PathBuf>) -> Option<PathBuf> {
+        if let Ok(name) = PathBuf::from_str(name) {
+
+            // as written in the import directive
+            if let Ok(absolute) = std::path::absolute(&name) {
+                if absolute.is_file() {
+                    return Some(absolute);
+                }
+            }
+            if name.is_relative() {
+
+                // relative to current proto file
+                if let Some(parent_path) = self.path.parent() {
+                    let file_path = parent_path.join(&name);
+                    if file_path.is_file() {
+                        return Some(file_path);
+                    }
+                }
+
+                // search in the provided list of directories
+                for dir in proto_path {
+                    let file_path = dir.join(&name);
+                    if file_path.is_file() {
+                        return Some(file_path);
+                    }
+                }
+            }
+        }
+        eprintln!("Imported file {name} not found");
+        None
+    }
+
+    fn read_imports(&self, proto_path: &Vec<PathBuf>, all: bool) -> Vec<ProtoFile> {
+        let mut res = vec![];
+        for import_name in self.extract_imports().into_iter() {
+            if all || import_name.1 {
+                if let Some(path) = self.resolve_path(&import_name.0, &proto_path) {
+                    let new = Self::new(path);
+                    res.push(new);
+                }
+            }
+        }
+        res
+    }
+}
+
+
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+/**************************************************************************************************/
+
+
 #[cfg(test)]
 mod parsing {
     use super::*;
+
+    const TEST_DATA_DIR: &'static str = r"C:\V\prj\rust\p18089\test-data-maker\data\";
 
     #[test]
     fn conformance() {
         for path in [
             // https://github.com/protocolbuffers/protobuf/blob/main/conformance/conformance.proto
-            r"C:\V\prj\rust\p18089\test-data-maker\data\conformance.proto",
+            "conformance.proto",
             // https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/test_messages_proto3.proto
-            r"C:\V\prj\rust\p18089\test-data-maker\data\test_messages_proto3.proto",
-            r"C:\V\prj\rust\p18089\test-data-maker\data\addressbook.proto",
+            "test_messages_proto3.proto",
+            "addressbook.proto",
         ] {
-            assert!(ProtoData::new(std::fs::read_to_string(path).unwrap().as_str()).is_ok());
+            let path = TEST_DATA_DIR.to_string() + path;
+            assert!(ProtoData::new(std::fs::read_to_string(path).unwrap().as_str()).unwrap().finalize().is_ok());
         }
     }
 
@@ -410,7 +564,7 @@ mod parsing {
     NEG = -1;
   }
 }"#;
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
 
         assert_eq!(proto.messages.len(), 2);
         assert_eq!(proto.enums.len(), 1);
@@ -427,7 +581,7 @@ mod parsing {
           map<int32, string> f2 = 2;
           map<int32, fixed32> f2 = 3;
         }"#;
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         assert_eq!(proto.messages.len(), 3);
         assert!(proto.get_message_definition("TestMessage").is_some());
         assert!(proto.get_message_definition("int32,string").is_some());
@@ -451,9 +605,9 @@ enum NestedEnum {
     BAR = 1;
 }
 "#;
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         assert_eq!(proto.messages.len(), 1);
-        let msg = proto.root_message();
+        let msg = proto.auto_detect_root_message().unwrap();
         assert_eq!(msg.comment, "comment 1");
         assert_eq!(msg.fields.len(), 1);
         assert_eq!(msg.fields[0].comment(), "comment 2");
@@ -461,5 +615,91 @@ enum NestedEnum {
         let enum0 = &proto.enums[0];
         assert_eq!(enum0.comment, "multiline\ncomment 3");
         assert_eq!(enum0.variants[1].2, "comment 4");
+    }
+
+
+    #[test]
+    fn auto_detect_root_message() {
+        {
+            let proto = ProtoData::new("message M1 { M2 m = 2; }\nmessage M2 { }").unwrap();
+            assert_eq!(proto.auto_detect_root_message().unwrap().name, "M1");
+        }
+        {
+            let proto = ProtoData::new("message M1 { M2 m = 2; }\nmessage M2 { }\nmessage M3 { }").unwrap();
+            let root_msg = proto.auto_detect_root_message().is_none();
+        }
+        {
+            let proto = ProtoData::new("message M1 { M2 m = 2; }\nmessage M2 { }\nmessage M3 { M1 m = 1; }").unwrap();
+            assert_eq!(proto.auto_detect_root_message().unwrap().name, "M3");
+        }
+        {
+            let proto = ProtoData::new("message M1 { M2 m = 2; }\nmessage M2 { M1 m = 1; }").unwrap();
+            assert!(proto.auto_detect_root_message().is_none());
+        }
+        {
+            let proto = ProtoData::new("").unwrap();
+            assert!(proto.auto_detect_root_message().is_none());
+        }
+    }
+
+
+    #[test]
+    fn import_files() {
+        let proto_file = ProtoFile::new((TEST_DATA_DIR.to_string() + "test_messages_proto3.proto").into());
+        assert_eq!(proto_file.extract_imports(), [
+            ("google/protobuf/any.proto".to_string(), false),
+            ("google/protobuf/duration.proto".to_string(), false),
+            ("google/protobuf/field_mask.proto".to_string(), false),
+            ("google/protobuf/struct.proto".to_string(), false),
+            ("google/protobuf/timestamp.proto".to_string(), false),
+            ("google/protobuf/wrappers.proto".to_string(), false),
+        ]);
+    }
+
+    #[test]
+    fn import_files_public() {
+        let proto_file = ProtoFile::new((TEST_DATA_DIR.to_string() + "import_tests/1.proto").into());
+        assert_eq!(proto_file.extract_imports(), [
+            ("2.proto".to_string(), false),
+            ("3.proto".to_string(), true),
+            ("dir/4.proto".to_string(), false),
+        ]);
+    }
+
+    #[test]
+    fn import_files_1() { // 1.proto -> import 3 files
+        let files = ProtoFile::new_with_imports((TEST_DATA_DIR.to_string() + "import_tests/1.proto").into(), vec![]);
+        assert_eq!(files.len(), 4);
+    }
+
+    #[test]
+    fn import_files_5() { // 5.proto -> 6.proto (7.proto not imported because it is not public)
+        let files = ProtoFile::new_with_imports((TEST_DATA_DIR.to_string() + "import_tests/5.proto").into(), vec![]);
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn import_files_8() { // 8.proto -> 9.proto -> 7.proto
+        let files = ProtoFile::new_with_imports((TEST_DATA_DIR.to_string() + "import_tests/8.proto").into(), vec![]);
+        assert_eq!(files.len(), 3);
+    }
+
+    #[test]
+    fn import_files_10() { // 10.proto -> dir/11.proto -> dir/4.proto (file in the same dir as parent)
+        let files = ProtoFile::new_with_imports((TEST_DATA_DIR.to_string() + "import_tests/10.proto").into(), vec![]);
+        assert_eq!(files.len(), 3);
+    }
+
+    #[test]
+    fn import_files_12() { // 12.proto -> dir/4.proto (file found in the proto_path)
+        let files = ProtoFile::new_with_imports((TEST_DATA_DIR.to_string() + "import_tests/12.proto").into(),
+                                                vec![(TEST_DATA_DIR.to_string() + "import_tests/dir/").into()]);
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn import_files_13() { // 13.proto -> 13.proto ...
+        let files = ProtoFile::new_with_imports((TEST_DATA_DIR.to_string() + "import_tests/13.proto").into(), vec![]);
+        assert_eq!(files.len(), 1);
     }
 }

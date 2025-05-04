@@ -859,9 +859,9 @@ bytes f_bytes = 60;
         let binary_input =
             [0x50, 0x0B, 0x58, 0x0C, 0x60, 0x1A, 0x6D, 0x0E, 0x00, 0x00, 0x00, 0x75, 0x0F, 0x00, 0x00, 0x00, 0xA0, 0x01, 0x10, 0xA8, 0x01, 0x11, 0xB0, 0x01, 0x24, 0xB9, 0x01, 0x13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC1, 0x01, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x01, 0x00, 0x00, 0xA8, 0x41, 0xF9, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x40, 0xC0, 0x02, 0x01, 0x92, 0x03, 0x06, 0x73, 0x74, 0x72, 0x69, 0x6E, 0x67, 0xE2, 0x03, 0x0A, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55];
 
-        let proto = ProtoData::new(all_scalar_proto()).unwrap();
+        let proto = ProtoData::new(all_scalar_proto()).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
 
 
         let mut read = PbReader::new(binary_input.as_slice());
@@ -913,9 +913,9 @@ bytes f_bytes = 60;
             0xF9, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF, 0x7F,             // double#31 = 1.7976931348623157e308
             0xC0, 0x02, 0x01]; // bool f_bool(#40) = true
 
-        let proto = ProtoData::new(all_scalar_proto()).unwrap();
+        let proto = ProtoData::new(all_scalar_proto()).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg.clone(), &mut limit).unwrap();
         assert_eq!(binary_input.len(), data.len());
@@ -955,9 +955,9 @@ bytes f_bytes = 60;
             0xC1, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80,             // sfixed64#24
             0xF5, 0x01, 0xFF, 0xFF, 0x7F, 0xFF,                                     // float#30
             0xF9, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF, 0xFF];            // double#31
-        let proto = ProtoData::new(all_scalar_proto()).unwrap();
+        let proto = ProtoData::new(all_scalar_proto()).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -983,9 +983,9 @@ bytes f_bytes = 60;
     #[test]
     fn scalars_duplicated() {
         let binary_input = [0x50, 0x01, 0x50, 0x0B];
-        let proto = ProtoData::new(all_scalar_proto()).unwrap();
+        let proto = ProtoData::new(all_scalar_proto()).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -1000,9 +1000,9 @@ bytes f_bytes = 60;
 
         let proto_str = r#"message Test5 {  repeated int32 f = 6;  }"#;
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -1016,9 +1016,9 @@ bytes f_bytes = 60;
 
         let proto_str = r#"message Test5 {  repeated int32 f = 10;  }"#;
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
         assert_eq!(binary_input.len(), data.len());
@@ -1039,9 +1039,9 @@ bytes f_bytes = 60;
         let binary_input = [0x0A, 0x03, 0x61, 0x62, 0x63, 0x0A, 0x03, 0x41, 0x42, 0x43];
         let proto_str = "message StrRepeated {  repeated string s = 1; }";
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
 
@@ -1056,9 +1056,9 @@ bytes f_bytes = 60;
         let binary_input = [0x0A, 0x01, 0xFF];
         let proto_str = r#"message StrTest {  repeated string s = 1; }"#;
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let h = MessageData::new(&mut read, &proto, root_msg, &mut limit);
         let msg = h.unwrap();
@@ -1072,9 +1072,9 @@ bytes f_bytes = 60;
         let binary_input = [0x0A, 0x00];
         let proto_str = "message EmptyStr { string s = 1; }";
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
         assert_eq!(data.to_string(), "message EmptyStr {\n  s = \n}\n");
@@ -1084,9 +1084,9 @@ bytes f_bytes = 60;
     fn empty_message() {
         let binary_input = [0x12, 0x00];
         let proto_str = "message EmptyMsg { M2 m = 2; }\nmessage M2 { int32 f = 3; }";
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
         assert_eq!(data.to_string(), "message EmptyMsg {\n  m = message M2 {\n}\n\n}\n");
@@ -1096,9 +1096,9 @@ bytes f_bytes = 60;
     fn empty_input() {
         let binary_input = [];
         let proto_str = "message EmptyMsg { }";
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
         assert_eq!(data.to_string(), "message EmptyMsg {\n}\n");
@@ -1109,9 +1109,9 @@ bytes f_bytes = 60;
         let binary_input = [0x0A, 0x03, 0x00, 0xFF, 0x00, 0x0A, 0x02, 0xFF, 0xEE];
         let proto_str = "message BytesRepeated { repeated bytes b = 1; }";
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let h = MessageData::new(&mut read, &proto, root_msg, &mut limit);
         let msg = h.unwrap();
@@ -1136,9 +1136,9 @@ message Pet {
 }
 ";
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg.clone(), &mut limit).unwrap();
 
@@ -1148,6 +1148,7 @@ message Pet {
         data.write(&mut output, &proto, root_msg).unwrap();
         assert_eq!(output, binary_input);
     }
+
 
     #[test]
     fn submessages() {
@@ -1176,8 +1177,10 @@ message House {
 }
 ";
 
-        let proto = ProtoData::new(proto_str).unwrap();
-        let root_msg = proto.root_message();
+        let proto = ProtoData::new(proto_str).unwrap(); //.finalize().unwrap();
+        let root_msg = proto.auto_detect_root_message().unwrap();
+        let proto = proto.finalize().unwrap();
+
         assert!(proto.get_message_definition("Pet").is_some());
         assert!(proto.get_message_definition("Human").is_some());
         assert!(proto.get_message_definition("House").is_some());
@@ -1214,9 +1217,9 @@ message House {
         //}
 
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg.clone(), &mut limit).unwrap();
 
@@ -1241,9 +1244,9 @@ message House {
 
         let proto_str = "message TestMessage { float length = 100; oneof test_oneof { string name = 101; int32 number = 102; }}";
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
 
         println!("{:?}", proto);
 
@@ -1269,9 +1272,9 @@ message House {
 
         let proto_str = r#"message TestMessage { float length = 100; oneof test_oneof { string name = 101; int32 number = 102; }}"#;
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
 
         let mut read = PbReader::new(binary_input.as_slice());
         let data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
@@ -1288,12 +1291,12 @@ message House {
 
         let proto_str = "message TestMessage {  map<int32, string> dict = 1; }";
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         assert!(proto.get_message_definition("TestMessage").is_some());
         // new message type created for the map field
         assert!(proto.get_message_definition("int32,string").is_some());
 
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
 
         assert_eq!(root_msg.fields.len(), 1);
 
@@ -1314,9 +1317,9 @@ message House {
         let binary_input = [];
         let proto_str = "message M1 { repeated int32 f1 = 1; }";
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
 
         let mut read = PbReader::new(binary_input.as_slice());
         let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
@@ -1339,9 +1342,9 @@ message House {
         let binary_input = [];
         let proto_str = "message M1 { repeated int32 f1 = 1; }";
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
 
         let mut read = PbReader::new(binary_input.as_slice());
         let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
@@ -1371,9 +1374,9 @@ message House {
         let binary_input = [];
         let proto_str = "message M1 { int32 f1 = 1; M2 m2 = 2; }\nmessage M2 { int32 f2 = 3; }";
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
 
         let mut read = PbReader::new(binary_input.as_slice());
         let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
@@ -1391,9 +1394,9 @@ message House {
         let binary_input = [];
         let proto_str = "message M1 { int32 f1 = 1; M2 m2 = 2; }\nmessage M2 { int32 f2 = 3; }";
 
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
 
         let mut read = PbReader::new(binary_input.as_slice());
         let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
@@ -1421,9 +1424,9 @@ message House {
             0x18, 0x0C]; // int32#a3 = 12
 
         let proto_str = "message M1 { repeated int32 a3 = 3; int32 c1 = 1; int32 b2 = 2; int32 d4 = 4; }";
-        let proto = ProtoData::new(proto_str).unwrap();
+        let proto = ProtoData::new(proto_str).unwrap().finalize().unwrap();
         let mut limit = binary_input.len() as u32;
-        let root_msg = proto.root_message();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new(binary_input.as_slice());
         let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
         assert_eq!(data.to_string(), "message M1 {\n  b2 = 8\n  a3 = 9\n  a3 = 10\n  c1 = 11\n  a3 = 12\n}\n");
@@ -1481,8 +1484,8 @@ message House {
 
     #[test]
     fn bench_repeated_string() {
-        let proto = ProtoData::new("message M { repeated string i1 = 1;  }").unwrap();
-        let root_msg = proto.root_message();
+        let proto = ProtoData::new("message M { repeated string i1 = 1;  }").unwrap().finalize().unwrap();
+        let root_msg = proto.auto_detect_root_message().unwrap();
         let mut read = PbReader::new([].as_slice());
         let mut data = MessageData::new(&mut read, &proto, root_msg, &mut 0).unwrap();
 
