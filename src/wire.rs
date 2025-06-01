@@ -85,10 +85,15 @@ pub struct FieldRange {
     pub amount: usize, // how many data items
 }
 
-//pub type FieldPath = Vec<FieldPos>;
-
 #[derive(Debug, Clone, Default)]
 pub struct FieldPath(pub Vec<FieldPos>);
+
+// TODO path+amount
+// #[derive(Debug, Clone, Default)]
+// pub struct RepeatedFieldPath {
+//     pub path: Vec<FieldPos>,
+//     pub amount: usize,
+// }
 
 impl FieldPath {
     pub fn new() -> FieldPath { FieldPath(vec![]) }

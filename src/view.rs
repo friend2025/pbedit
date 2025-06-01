@@ -19,12 +19,13 @@ pub(crate) const MARGIN_LEFT: u16 = 1;
 pub enum UserCommand
 {
     Refresh,
-    // keys up,down,pageup,pagedown, or mouse wheel
-    // true - move up
-    ScrollVertically(usize, bool),
+    // move left - negative, right - positive value
+    ScrollHorizontally(i8),
+    // keys (page)up/down, or mouse wheel
+    // move up - negative, move down - positive value
+    ScrollVertically(isize),
     ScrollSibling(i8),
     ScrollToBottom,
-    ScrollHorizontally(i8),
     Home,
     End,
     // hotkey: 'C' comments visibility (enum CommentVisibility)
@@ -38,7 +39,7 @@ pub enum UserCommand
     // hotkey: 'P'
     // show/hide tyPe (by default shown only in a few cases)
     DataTypeVisibility,
-    // hotkey: '→', '←' on collapsed field name
+    // hotkey: Enter/F5 on collapsed field name
     CollapsedToggle,
     // hotkey: 'T'
     // tree / table mode switch) (vert/horiz auto select by content)
@@ -91,15 +92,6 @@ pub enum LayoutType {
     Collapsed,
 }
 
-pub struct LayoutParams {
-    // how many lines occupies this layout on the screen
-    pub height: usize,
-    pub path: FieldPath,
-    pub layout: Option<Box<dyn ViewLayout>>,
-    pub sibling_index: usize, // index of this field in the parent
-    pub sibling_count: usize, // how many siblings has this field's the parent
-}
-
 pub struct Layouts { // rename Document
     pub width: u16,
     pub height: u16,
@@ -107,18 +99,27 @@ pub struct Layouts { // rename Document
     pub items: Vec<LayoutParams>,
     pub file_name: String,
     pub indents: Vec<u16>,
+    pub top_layouts_count: usize,
+}
+
+pub struct LayoutParams {
+    // how many lines requires this layout on the screen
+    pub height: usize,
+    pub path: FieldPath,
+    pub amount: usize, // how many repeated data shown by this layout, starting from path
+    pub layout: Option<Box<dyn ViewLayout>>,
+    pub children_count: usize,
 }
 
 // does not store data, only params how to display it
 // in next versions: multiple cursor, selection and highlight (found item, etc.)
 pub trait ViewLayout {
     fn layout_type(&self) -> LayoutType;
-    fn amount(&self) -> usize; // TODO? move to LayoutParams
     // return how many screen lines take this layout
-    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize;
+    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, amount: usize, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize;
     // TODO first_line: usize, line_count: u16
-    fn get_screen(&self, root: &MessageData, path: &FieldPath, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines;
-    fn on_command(&mut self, root: &MessageData, path: &FieldPath, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult;
+    fn get_screen(&self, root: &MessageData, path: &FieldPath, amount: usize, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines;
+    fn on_command(&mut self, root: &MessageData, path: &FieldPath, amount: usize, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult;
     // get ids of children fields already shown in this layout
     fn get_consumed_fields(&self, root: &MessageData, path: &FieldPath, config: &LayoutConfig) -> HashSet<i32> { HashSet::new() }
     fn get_status_string(&self, cursor_x: u16, cursor_y: usize) -> String { String::new() }
@@ -128,25 +129,25 @@ pub trait ViewLayout {
 // bool, enum, integral, or real value: single, none or repeated
 // there are special layouts for text and hex field types
 pub struct ScalarLayout {
-    amount: usize, // how many data with the same id, started from the provided index
+    //amount: usize, // how many data with the same id, started from the provided index
     line_lens: Vec<usize>, // how many scalar values of each line on the screen
 }
 pub struct StringLayout {
-    has_value: bool,
+    //has_value: bool,
     visible_lines_count: usize, // TODO
 }
 pub struct BytesLayout {
-    has_value: bool,
+    //has_value: bool,
     bytes_per_line: u16,
     data_size: usize,
     //visible_lines_count: usize, // TODO
 }
 pub struct MessageLayout { // with columns or title only
-    amount: usize,
+    //amount: usize,
     scroll: usize, // first visible column index
 }
 pub struct TableLayout { // for repeated messages
-    amount: usize,
+    //amount: usize,
     vertical: bool,
     scroll: (usize, usize), // column and row indexes of top-left visible cell
 }
@@ -375,8 +376,8 @@ impl Into<Vec<u16>> for IndentsCalc {
 impl ScalarLayout {
     const MARGIN: u16 = MARGIN_LEFT + MARGIN_RIGHT;
 
-    fn new(amount: usize) -> Self {
-        ScalarLayout { amount, line_lens: vec![] }
+    fn new() -> Self {
+        ScalarLayout { line_lens: vec![] }
     }
     fn add_scalar_value(line: &mut ScreenLine, value: &ScalarValue, def: &FieldProtoPtr, config: &LayoutConfig, selected: bool) {
         line.0.push((' ', TextStyle::Divider));
@@ -400,12 +401,12 @@ impl ScalarLayout {
         }
     }
 
-    fn get_line_lens(&self, full_width: u16, indent: u16, def: &FieldProtoPtr, msg: &MessageData, path: &FieldPath, config: &LayoutConfig) -> Vec<usize> {
+    fn get_line_lens(&self, full_width: u16, indent: u16, def: &FieldProtoPtr, msg: &MessageData, path: &FieldPath, amount: usize, config: &LayoutConfig) -> Vec<usize> {
         let mut avail_width = (full_width - indent - Self::MARGIN) as usize;
         if def.repeated() { avail_width -= 1 }
         avail_width -= def.typename().len();
 
-        debug_assert!(self.amount > 0);
+        debug_assert!(amount > 0);
         let mut cur_len = 0;
         //let mut line_count = 1;
 
@@ -413,7 +414,7 @@ impl ScalarLayout {
         let mut prv_line_end = 0;
 
         if let Some(last_pos) = path.0.last() {
-            for index in last_pos.index..last_pos.index + self.amount {
+            for index in last_pos.index..last_pos.index + amount {
                 if let Some(field) = msg.get_field(&([(last_pos.id, index).into()])) {
                     if let FieldValue::SCALAR(value) = &field.value {
                         let str_value = Self::scalar_to_string(value, def, config);
@@ -429,7 +430,7 @@ impl ScalarLayout {
                     }
                 }
             }
-            let last_line_len = last_pos.index + self.amount - prv_line_end;
+            let last_line_len = last_pos.index + amount - prv_line_end;
             if last_line_len > 0 { starts.push(last_line_len) }
         }
 
@@ -456,22 +457,22 @@ impl ScalarLayout {
 }
 impl ViewLayout for ScalarLayout {
     fn layout_type(&self) -> LayoutType { LayoutType::Scalar }
-    fn amount(&self) -> usize { self.amount }
     fn get_status_string(&self, cursor_x: u16, cursor_y: usize) -> String {
-        format!("/{}", self.amount)
+        //format!("/{}", self.amount)
+        String::new()
     }
-    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
+    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, amount: usize, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
         if let Some(field_proto) = root.get_field_definition(path) {
             let field_name_length = field_proto.name().len();
             let level = path.0.len();
             let indent = negotiator.add(field_name_length, level);
 
             let mut line_count = 1;
-            if self.amount > 0 {
+            if amount > 0 {
                 let mut p = path.0.clone();
                 p.pop();
                 if let Some(msg) = root.get_submessage(&p) {
-                    self.line_lens = self.get_line_lens(width, indent, &field_proto, msg, path, config);
+                    self.line_lens = self.get_line_lens(width, indent, &field_proto, msg, path, amount, config);
                     line_count = self.line_lens.len();
                 }
             }
@@ -487,7 +488,7 @@ impl ViewLayout for ScalarLayout {
     // TODO        todo!()
     // TODO    }
 
-    fn get_screen(&self, root: &MessageData, path: &FieldPath, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
+    fn get_screen(&self, root: &MessageData, path: &FieldPath, amount: usize, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
         let mut lines = ScreenLines::new();
         let mut line = ScreenLine::new(width);
         if let Some(field_def) = root.get_field_definition(path) {
@@ -496,7 +497,7 @@ impl ViewLayout for ScalarLayout {
 
             let selected_index = cursor.map_or(usize::MAX, |(x, y)| self.data_index_at_cursor(x, y));
 
-            if self.amount == 0 {
+            if amount == 0 {
                 // no data was read, show default value
                 if let FieldValue::SCALAR(value) = field_def.default() {
                     Self::add_scalar_value(&mut line, &value, &field_def, config, selected_index == 0);
@@ -506,11 +507,11 @@ impl ViewLayout for ScalarLayout {
                 if field_def.repeated() { avail_width -= 1 }
                 avail_width -= field_def.typename().len();
 
-                debug_assert!(self.amount > 0);
+                debug_assert!(amount > 0);
                 let mut cur_len = 0;
                 let mut line_count = 1;
                 let mut p = path.0.clone();
-                for index in 0..self.amount {
+                for index in 0..amount {
                     if let Some(field) = root.get_field(&p) {
                         if let FieldValue::SCALAR(value) = &field.value {
                             let str_value = Self::scalar_to_string(value, &field_def, config);
@@ -537,7 +538,7 @@ impl ViewLayout for ScalarLayout {
             }
 
             if lines.0.is_empty() {
-                line.add_typename(field_def.clone(), width, self.amount == 0);
+                line.add_typename(field_def.clone(), width, amount == 0);
             }
             line.fix_length(width);
         }
@@ -545,29 +546,29 @@ impl ViewLayout for ScalarLayout {
         lines.0.push(line);
         lines
     }
-    fn on_command(&mut self, root: &MessageData, path: &FieldPath, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_y: &mut usize) -> CommandResult
+    fn on_command(&mut self, root: &MessageData, path: &FieldPath, amount: usize, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult
     {
         match command {
             UserCommand::DeleteData => {
-                let index = self.data_index_at_cursor(*cursor_x, *cursor_y);
-                if self.amount > 0 && index > 0 && index == self.amount - 1 {
+                let index = self.data_index_at_cursor(*cursor_x, *cursor_pos);
+                if amount > 0 && index > 0 && index == amount - 1 {
                     // correct cursor position after deleting last data item
-                    (*cursor_x, *cursor_y) = self.cursor_at_data_index(index - 1);
+                    (*cursor_x, *cursor_pos) = self.cursor_at_data_index(index - 1);
                 }
                 let path = path.with_last_index(path.0.last().unwrap().index + index);
                 self.line_lens.clear();
                 CommandResult::ChangeData(Change { path, action: ChangeType::Delete })
             }
             UserCommand::InsertData => {
-                let index = self.data_index_at_cursor(*cursor_x, *cursor_y);
+                let index = self.data_index_at_cursor(*cursor_x, *cursor_pos);
                 let path = path.with_last_index(path.0.last().unwrap().index + index + 1);
-                (*cursor_x, *cursor_y) = self.cursor_at_data_index(index + 1);
+                (*cursor_x, *cursor_pos) = self.cursor_at_data_index(index + 1);
                 self.line_lens.clear();
                 let def = root.get_field_definition(&path).unwrap();
                 CommandResult::ChangeData(Change { path: path.clone(), action: ChangeType::Insert(def.default()) })
             }
             UserCommand::ScrollHorizontally(delta) => {
-                if let Some(len) = self.line_lens.get(*cursor_y) {
+                if let Some(len) = self.line_lens.get(*cursor_pos) {
                     if delta > 0 {
                         *cursor_x = (*cursor_x + delta as u16).min(*len as u16);
                     } else { // delta < 0
@@ -582,7 +583,7 @@ impl ViewLayout for ScalarLayout {
                 CommandResult::Redraw
             }
             UserCommand::End => {
-                if let Some(len) = self.line_lens.get(*cursor_y) {
+                if let Some(len) = self.line_lens.get(*cursor_pos) {
                     *cursor_x = *len as u16;
                 }
                 CommandResult::Redraw
@@ -594,12 +595,12 @@ impl ViewLayout for ScalarLayout {
 
 impl StringLayout {
     const MARGIN: u16 = 8 + MARGIN_LEFT + MARGIN_RIGHT;
-    fn get_lines_formated<'t>(&self, full_width: u16, indent: u16, repeated: bool, text: &'t String) -> Vec<(&'t str, bool)> {
+    fn get_lines_formated<'t>(&self, full_width: u16, indent: u16, repeated: bool, empty_field: bool, text: &'t String) -> Vec<(&'t str, bool)> {
         let mut res = vec![];
 
         let mut avail_width = (full_width - indent - Self::MARGIN) as usize;
         if repeated { avail_width -= 1 }
-        if !self.has_value { avail_width -= 1 }
+        if empty_field { avail_width -= 1 }
 
         for line in text.lines() {
             let mut start_pos = 0;
@@ -623,8 +624,7 @@ impl StringLayout {
 }
 impl ViewLayout for StringLayout {
     fn layout_type(&self) -> LayoutType { LayoutType::Str }
-    fn amount(&self) -> usize { if self.has_value { 1 } else { 0 } }
-    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
+    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, amount: usize, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
 
         // calculate width of first column as maximum length of field name and address
         let mut def: Option<FieldProtoPtr> = None;
@@ -646,14 +646,14 @@ impl ViewLayout for StringLayout {
             let indent = negotiator.add(field_def.name().len(), path.0.len());
 
             if let Some(text) = value {
-                line_count = self.get_lines_formated(width, indent, field_def.repeated(), text).len();
+                line_count = self.get_lines_formated(width, indent, field_def.repeated(), amount==0, text).len();
 
                 let mut address_len = 0;
                 address_len = format!("{}", line_count).len() as u16;
 
                 if address_len > indent {
                     negotiator.add(address_len as usize, path.0.len());
-                    line_count = self.get_lines_formated(width, indent, field_def.repeated(), text).len();
+                    line_count = self.get_lines_formated(width, indent, field_def.repeated(), amount==0, text).len();
                     // if line count changed, address length may be increased
                 }
             }
@@ -661,7 +661,7 @@ impl ViewLayout for StringLayout {
         return line_count.max(1);
     }
 
-    fn get_screen(&self, root: &MessageData, path: &FieldPath, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
+    fn get_screen(&self, root: &MessageData, path: &FieldPath, amount: usize, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
         let mut lines = vec![];
         let mut line = ScreenLine::new(width);
 
@@ -670,7 +670,7 @@ impl ViewLayout for StringLayout {
 
             if let Some(field) = root.get_field(&path.0) {
                 if let FieldValue::SCALAR(ScalarValue::STR(value)) = &field.value {
-                    let line_by_line = self.get_lines_formated(width, indent, field_def.repeated(), value);
+                    let line_by_line = self.get_lines_formated(width, indent, field_def.repeated(), amount==0, value);
                     if line_by_line.len() <= 1 {
                         line.0.push((' ', TextStyle::Divider));
                         line.0.push(('\'', TextStyle::Divider));
@@ -703,11 +703,11 @@ impl ViewLayout for StringLayout {
                 line.0.push(('\'', TextStyle::Divider));
             }
             lines.push(line);
-            lines.first_mut().unwrap().add_typename(field_def, width, !self.has_value);
+            lines.first_mut().unwrap().add_typename(field_def, width, amount==0);
         }
         ScreenLines(lines)
     }
-    fn on_command(&mut self, root: &MessageData, path: &FieldPath, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult
+    fn on_command(&mut self, root: &MessageData, path: &FieldPath, amount: usize, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult
     {
         //        if let Some(field) = root.get_field(&path.0) {
         //            if let FieldValue::SCALAR(ScalarValue::STR(value)) = &field.value {
@@ -723,11 +723,11 @@ impl ViewLayout for StringLayout {
 }
 
 impl BytesLayout {
-    fn calc_sizes_internal(&self, mut width: u16, indent: u16, repeated: bool) -> (usize, u16) {
+    fn calc_sizes_internal(&self, mut width: u16, indent: u16, repeated: bool, empty_field: bool) -> (usize, u16) {
         let mut free_width = width;
         free_width -= indent + 1; // field and ':'
         free_width -= 5; // "bytes".len()
-        if !self.has_value { free_width -= 1 } // '-' before type name
+        if empty_field { free_width -= 1 } // '-' before type name
         if repeated { free_width -= 1 } // '*' after type name
 
         let mut blocks_count = free_width / (8 * 3 + 1); // each block 8 bytes wide
@@ -776,8 +776,7 @@ impl BytesLayout {
 
 impl ViewLayout for BytesLayout {
     fn layout_type(&self) -> LayoutType { LayoutType::Bytes }
-    fn amount(&self) -> usize { if self.has_value { 1 } else { 0 } }
-    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
+    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, amount: usize, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
 
         // calculate width of first column as maximum length of field name and address
         let mut name_len = 0;
@@ -785,7 +784,7 @@ impl ViewLayout for BytesLayout {
         self.data_size = 0;
         let mut repeated = false;
         if let Some(field) = root.get_field(&path.0) {
-            debug_assert!(self.has_value);
+            debug_assert!(amount > 0);
             if let FieldValue::SCALAR(ScalarValue::BYTES(data)) = &field.value {
                 self.data_size = data.len();
                 address_len = format!("{:x}", self.data_size).len();
@@ -801,12 +800,12 @@ impl ViewLayout for BytesLayout {
             }
         }
         let indent = negotiator.add(address_len.max(name_len), path.0.len());
-        let (height, len) = self.calc_sizes_internal(width, indent, repeated);
+        let (height, len) = self.calc_sizes_internal(width, indent, repeated, amount==0);
         self.bytes_per_line = len;
         height
     }
 
-    fn get_screen(&self, root: &MessageData, path: &FieldPath, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
+    fn get_screen(&self, root: &MessageData, path: &FieldPath, amount: usize, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
         let mut lines = vec![];
         let mut line = ScreenLine::new(width);
 
@@ -838,22 +837,22 @@ impl ViewLayout for BytesLayout {
             }
             line.fix_length(width);
             lines.push(line);
-            lines.first_mut().unwrap().add_typename(field_def, width, !self.has_value);
+            lines.first_mut().unwrap().add_typename(field_def, width, amount==0);
         }
         ScreenLines(lines)
     }
 
-    fn on_command(&mut self, root: &MessageData, path: &FieldPath, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_y: &mut usize) -> CommandResult {
+    fn on_command(&mut self, root: &MessageData, path: &FieldPath, amount: usize, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult {
         match command {
             UserCommand::DeleteData => {
                 if let Some(field) = root.get_field(&path.0) {
                     if let FieldValue::SCALAR(BYTES(value)) = &field.value {
-                        if let Some(index) = self.data_index_from_cursor(*cursor_x, *cursor_y) {
+                        if let Some(index) = self.data_index_from_cursor(*cursor_x, *cursor_pos) {
                             let mut value = value.clone();
                             value.remove(index);
                             self.data_size = value.len();
                             if self.data_size > 0 {
-                                (*cursor_x, *cursor_y) = self.cursor_from_data_index(index.min(self.data_size - 1));
+                                (*cursor_x, *cursor_pos) = self.cursor_from_data_index(index.min(self.data_size - 1));
                             } else { *cursor_x = 0 }
                             return CommandResult::ChangeData(Change { path: path.clone(), action: ChangeType::Overwrite(FieldValue::SCALAR(BYTES(value))) });
                         }
@@ -865,10 +864,10 @@ impl ViewLayout for BytesLayout {
             UserCommand::InsertData => {
                 if let Some(field) = root.get_field(&path.0) {
                     if let FieldValue::SCALAR(BYTES(value)) = &field.value {
-                        if let Some(index) = self.data_index_from_cursor(*cursor_x, *cursor_y) {
+                        if let Some(index) = self.data_index_from_cursor(*cursor_x, *cursor_pos) {
                             let mut value = value.clone();
                             value.insert(index + 1, 0);
-                            (*cursor_x, *cursor_y) = self.cursor_from_data_index(index + 1);
+                            (*cursor_x, *cursor_pos) = self.cursor_from_data_index(index + 1);
                             return CommandResult::ChangeData(Change { path: path.clone(), action: ChangeType::Overwrite(FieldValue::SCALAR(BYTES(value))) });
                         }
                     }
@@ -879,7 +878,7 @@ impl ViewLayout for BytesLayout {
             UserCommand::ScrollHorizontally(delta) => {
                 if delta > 0 {
                     *cursor_x = (*cursor_x + delta as u16).min(self.bytes_per_line);
-                    if *cursor_x as usize + *cursor_y * self.bytes_per_line as usize > self.data_size {
+                    if *cursor_x as usize + *cursor_pos * self.bytes_per_line as usize > self.data_size {
                         *cursor_x = (self.data_size % self.bytes_per_line as usize) as u16;
                     }
                 } else { // delta < 0
@@ -896,8 +895,8 @@ impl ViewLayout for BytesLayout {
 
             UserCommand::End => {
                 *cursor_x = self.bytes_per_line;
-                let index = self.data_index_from_cursor((*cursor_x).max(1), *cursor_y).unwrap();
-                (*cursor_x, *cursor_y) = self.cursor_from_data_index(index.min(self.data_size - 1));
+                let index = self.data_index_from_cursor((*cursor_x).max(1), *cursor_pos).unwrap();
+                (*cursor_x, *cursor_pos) = self.cursor_from_data_index(index.min(self.data_size - 1));
                 CommandResult::Redraw
             }
 
@@ -910,35 +909,33 @@ impl ViewLayout for BytesLayout {
     }
 
     fn get_status_string(&self, cursor_x: u16, cursor_y: usize) -> String {
-        self.data_index_from_cursor(cursor_x, cursor_y).map_or(String::new(), |index|format!("{}/{}", index, self.data_size))
+        self.data_index_from_cursor(cursor_x, cursor_y).map_or(String::new(), |index| format!("{}/{}", index, self.data_size))
     }
-
 }
 
 impl MessageLayout {
-    fn new(amount: usize) -> Self {
-        MessageLayout { amount, scroll: 0 }
+    fn new() -> Self {
+        MessageLayout {  scroll: 0 }
     }
 }
 impl ViewLayout for MessageLayout {
     fn layout_type(&self) -> LayoutType { LayoutType::Message }
-    fn amount(&self) -> usize { self.amount }
-    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
+    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, amount: usize, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
         if let Some(field_def) = root.get_field_definition(path) {
             negotiator.add(field_def.name().len(), path.0.len());
         }
         return 1;
     }
-    fn get_screen(&self, root: &MessageData, path: &FieldPath, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
-        debug_assert!(self.amount <= 1);
+    fn get_screen(&self, root: &MessageData, path: &FieldPath, amount: usize, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
+        debug_assert!(amount <= 1);
         let mut line = ScreenLine::new(width);
         if let Some(field_def) = root.get_field_definition(path) {
             line.add_field_name(field_def.name().clone(), indent, &cursor);
-            line.add_typename(field_def, width, self.amount == 0);
+            line.add_typename(field_def, width, amount == 0);
         }
         ScreenLines(vec![line])
     }
-    fn on_command(&mut self, root: &MessageData, path: &FieldPath, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult
+    fn on_command(&mut self, root: &MessageData, path: &FieldPath, amount: usize, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult
     {
         match command {
             //UserCommand::TableTreeToggle => { CommandResult::ChangeLayout(LayoutType::Table) }
@@ -948,25 +945,24 @@ impl ViewLayout for MessageLayout {
 }
 
 impl TableLayout {
-    fn new(path: FieldPath, amount: usize) -> Self {
-        TableLayout { amount, vertical: false, scroll: (0, 0) }
+    fn new(path: FieldPath) -> Self {
+        TableLayout { vertical: false, scroll: (0, 0) }
     }
 }
 impl ViewLayout for TableLayout {
     fn layout_type(&self) -> LayoutType { LayoutType::Table }
-    fn amount(&self) -> usize { self.amount }
-    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
+    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, amount: usize, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
         todo!()
     }
-    fn get_screen(&self, root: &MessageData, path: &FieldPath, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
+    fn get_screen(&self, root: &MessageData, path: &FieldPath, amount: usize, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
         let mut line = ScreenLine::new(width);
         if let Some(field) = root.get_field(&path.0) {
             line.add_field_name(field.def.name().clone(), indent, &cursor);
-            line.add_typename(field.def.clone(), width, self.amount == 0);
+            line.add_typename(field.def.clone(), width, amount == 0);
         }
         ScreenLines(vec![line])
     }
-    fn on_command(&mut self, root: &MessageData, path: &FieldPath, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult
+    fn on_command(&mut self, root: &MessageData, path: &FieldPath, amount: usize, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult
     {
         match command {
             _ => CommandResult::None //todo!()
@@ -976,13 +972,12 @@ impl ViewLayout for TableLayout {
 
 impl ViewLayout for CollapsedLayout {
     fn layout_type(&self) -> LayoutType { LayoutType::Collapsed }
-    fn amount(&self) -> usize { todo!() }
-    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
+    fn calc_sizes(&mut self, root: &MessageData, path: &FieldPath, amount: usize, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) -> usize {
         let def = root.get_field_definition(path).unwrap();
         negotiator.add(def.name().len(), path.0.len());
         return 1;
     }
-    fn get_screen(&self, root: &MessageData, path: &FieldPath, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
+    fn get_screen(&self, root: &MessageData, path: &FieldPath, amount: usize, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines {
         let mut line = ScreenLine::new(width);
 
         if let Some(field_def) = root.get_field_definition(path) {
@@ -999,7 +994,7 @@ impl ViewLayout for CollapsedLayout {
         //        }
         ScreenLines(vec![line])
     }
-    fn on_command(&mut self, root: &MessageData, path: &FieldPath, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult {
+    fn on_command(&mut self, root: &MessageData, path: &FieldPath, amount: usize, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult {
         match command {
             _ => CommandResult::None //todo!()
         }
@@ -1063,11 +1058,11 @@ impl TextStyle {
 }
 
 impl LayoutParams {
-    pub fn new(path: FieldPath, layout: Box<dyn ViewLayout>) -> LayoutParams {
-        LayoutParams { height: 1, path, layout: Some(layout), sibling_count: 0, sibling_index: 0 }
+    pub fn new(path: FieldPath, amount: usize, layout: Box<dyn ViewLayout>) -> LayoutParams {
+        LayoutParams { height: 1, path, amount, layout: Some(layout), children_count: 0 }
     }
-    pub fn new_empty(path: FieldPath) -> LayoutParams {
-        LayoutParams { height: 1, path, layout: None, sibling_count: 0, sibling_index: 0 }
+    pub fn new_empty(path: FieldPath, amount: usize) -> LayoutParams {
+        LayoutParams { height: 1, path, amount, layout: None, children_count: 0 }
     }
     pub fn level(&self) -> usize {
         self.path.0.len()
@@ -1080,14 +1075,14 @@ impl LayoutParams {
     }
     pub fn calc_sizes(&mut self, root: &MessageData, config: &LayoutConfig, width: u16, negotiator: &mut IndentsCalc) {
         if let Some(layout) = &mut self.layout {
-            self.height = layout.as_mut().calc_sizes(root, &self.path, config, width, negotiator);
+            self.height = layout.as_mut().calc_sizes(root, &self.path, self.amount, config, width, negotiator);
         }
     }
 
     pub fn get_screen(&self, root: &MessageData, width: u16, indent: u16, config: &LayoutConfig, cursor: Option<(u16, usize)>) -> ScreenLines
     {
         if let Some(layout) = &self.layout {
-            layout.get_screen(root, &self.path, width, indent, config, cursor)
+            layout.get_screen(root, &self.path, self.amount, width, indent, config, cursor)
         } else {
             debug_assert!(false);
             ScreenLines::new()
@@ -1097,7 +1092,7 @@ impl LayoutParams {
     pub fn on_command(&mut self, root: &MessageData, command: UserCommand, config: &LayoutConfig, width: u16, indent: u16, cursor_x: &mut u16, cursor_pos: &mut usize) -> CommandResult {
         if let Some(layout) = &mut self.layout {
             match command {
-                _ => layout.on_command(root, &self.path, command, config, width, indent, cursor_x, cursor_pos),
+                _ => layout.on_command(root, &self.path, self.amount, command, config, width, indent, cursor_x, cursor_pos),
             }
         } else { CommandResult::None }
     }
@@ -1105,9 +1100,10 @@ impl LayoutParams {
 
 impl Layouts {
     pub fn new(root: &MessageData, config: &LayoutConfig, opened_file_name: String, width: u16, height: u16) -> Layouts {
+        let sorted_fields = root.get_sorted_fields(&config.field_order);
         let mut items: Vec<LayoutParams> =
-            root.get_sorted_fields(&config.field_order).into_iter().
-                map(|pos_ex| Self::create_field_layouts(root, &config, &FieldPath([pos_ex.0].into()), pos_ex.1, false)).
+            sorted_fields.into_iter().enumerate().
+                map(|(layout_index, pos_ex)| Self::create_field_layouts(root, &config, &FieldPath([pos_ex.0].into()), pos_ex.1, false)).
                 flatten().collect();
 
         let mut negotiator = IndentsCalc::new();
@@ -1116,9 +1112,9 @@ impl Layouts {
             item.calc_sizes(root, config, width, &mut negotiator); // for scalar field only, messages are empty
         }
 
-        let mut layouts = Layouts { items, file_name: opened_file_name, indents: negotiator.level_indents, scroll: 0, width, height };
-        layouts.update_indexes_sibling(0);
-        layouts
+        let top_layouts_count = Self::calc_top_layouts_count(&items);
+
+        Layouts { items, file_name: opened_file_name, indents: negotiator.level_indents, scroll: 0, top_layouts_count, width, height }
     }
 
     fn create_field_layouts(root: &MessageData, config: &LayoutConfig, path: &FieldPath, amount: usize, load_all: bool) -> Vec<LayoutParams> {
@@ -1154,19 +1150,21 @@ impl Layouts {
     pub fn create_message_layouts(root: &MessageData, config: &LayoutConfig, path: &FieldPath, amount: usize, load_all: bool) -> Vec<LayoutParams> {
         let mut items: Vec<LayoutParams> = vec![];
         if load_all {
-            let msg_layout = MessageLayout::new(amount);
+            let msg_layout = MessageLayout::new();
             let consumed_fields = msg_layout.get_consumed_fields(root, path, config);
-            items.push(LayoutParams::new(path.clone(), Box::new(msg_layout)));
+            items.push(LayoutParams::new(path.clone(), amount, Box::new(msg_layout)));
             if amount > 0 {
                 let msg = root.get_submessage(&path.0).unwrap();
-                for (pos, amount) in msg.get_sorted_fields(&config.field_order) {
-                    if !consumed_fields.contains(&pos.id) {
-                        items.append(&mut Self::create_field_layouts(root, config, &path.add(pos), amount, load_all));
-                    }
-                }
+                let sorted_fields = msg.get_sorted_fields(&config.field_order);
+                let mut descendants = sorted_fields.into_iter().
+                    filter(|(pos, _)| !consumed_fields.contains(&pos.id)).
+                    map(|(pos, amount)| Self::create_field_layouts(root, config, &path.add(pos), amount, load_all)).
+                    flatten().collect::<Vec<LayoutParams>>();
+                items.last_mut().unwrap().children_count = Self::calc_top_layouts_count(&descendants);
+                items.append(&mut descendants);
             }
         } else {
-            items.push(LayoutParams::new_empty(path.clone()));
+            items.push(LayoutParams::new_empty(path.clone(), amount));
         }
         items
     }
@@ -1178,23 +1176,23 @@ impl Layouts {
             "bytes" => {
                 let start = path.0.last().unwrap().index;
                 for index in start..start + amount.max(1) {
-                    items.push(LayoutParams::new(path.with_last_index(index), Box::new(BytesLayout {
-                        has_value: amount != 0,
-                        bytes_per_line: 0,
-                        data_size: 0,
-                    })))
+                    items.push(LayoutParams::new(path.with_last_index(index), amount.min(1)
+                                                 , Box::new(BytesLayout {
+                                                                         bytes_per_line: 0,
+                                                                         data_size: 0,
+                                                                     })))
                 }
             }
             "string" => {
                 let start = path.0.last().unwrap().index;
                 for index in start..start + amount.max(1) {
-                    items.push(LayoutParams::new(path.with_last_index(index), Box::new(StringLayout {
-                        has_value: amount != 0,
-                        visible_lines_count: 0,
-                    })))
+                    items.push(LayoutParams::new(path.with_last_index(index), amount.min(1)
+                                                 , Box::new(StringLayout {
+                                                                         visible_lines_count: 0,
+                                                                     })))
                 }
             }
-            _ => items.push(LayoutParams::new(path, Box::new(ScalarLayout::new(amount)))),
+            _ => items.push(LayoutParams::new(path, amount, Box::new(ScalarLayout::new()))),
         }
         items
     }
@@ -1254,8 +1252,26 @@ impl Layouts {
         }
     }
 
+    // how many layouts in the vector has minimal available level
+    fn calc_top_layouts_count(items: &Vec<LayoutParams>) -> usize {
+        let mut level = None;
+        let mut top_level_count = 0;
 
-    fn get_children_count(&self, parent_pos: usize) -> usize {
+        for layout in items {
+            if let Some(level) = level {
+                if layout.level() == level {
+                    top_level_count += 1;
+                }
+                debug_assert!(layout.level() >= level);
+            } else {
+                level = Some(layout.level());
+                top_level_count = 1;
+            }
+        }
+        top_level_count
+    }
+
+    fn calc_children_count(&self, parent_pos: usize) -> usize {
         if let Some(current) = self.items.get(parent_pos) {
             let path_len = current.path.0.len();
             let mut end_pos = parent_pos + 1;
@@ -1293,59 +1309,56 @@ impl Layouts {
             }
             self.indents = negotiator.into();
         }
-        self.update_indexes_sibling(pos);
-        self.update_indexes_descendant(pos);
         debug_assert!(new_layout_count > 0);
         debug_assert!(new_lines_count > 0);
         (new_layout_count, new_lines_count)
     }
 
 
-    // update sibling_index and sibling_count of all the descendant of the layout at the pos
-    fn update_indexes_descendant(&mut self, pos: usize) {
-        if let Some(current) = self.items.get(pos) {
-            let min_len = current.path.0.len();
+    pub fn calc_relative_pos(&self, mut pos: usize) -> f32 {
+        let mut index = 0;
+        let mut level = usize::MAX;
 
-            let mut children_indexes = vec![];
-            for i in pos + 1..self.items.len() {
-                let len = current.path.0.len();
-                if len < min_len { break; } // next sibling or parent
-                if len + 1 == min_len { children_indexes.push(i); }
-            }
+        // index of a layout and count of its sibling
+        // the index started at zero for top-level layouts and at one for nested layouts
+        let mut index_n_size = Vec::with_capacity(16);
+        loop {
+            if let Some(layout) = self.items.get(pos) {
+                let current_level = layout.level();
+                if current_level < level {
+                    debug_assert!(level == current_level + 1 || level == usize::MAX);
+                    level = current_level;
+                    index_n_size.push(index);
+                    index_n_size.push(layout.children_count);
+                    index = 0;
+                }
 
-            let sibling_count = children_indexes.len();
-            for i in children_indexes {
-                self.items[i].sibling_index = i;
-                self.items[i].sibling_count = sibling_count;
-                self.update_indexes_descendant(i);
-            }
-        }
-    }
-
-    // update sibling_index and sibling_count of the layout at the pos
-    fn update_indexes_sibling(&mut self, pos: usize) {
-        if let Some(current) = self.items.get(pos) {
-            let min_len = current.path.0.len();
-
-            let mut siblings_indexes = vec![];
-            for i in pos..0 { // gather siblings upward
-                let len = current.path.0.len();
-                if len < min_len { break; }
-                if len == min_len { siblings_indexes.push(i); }
-            }
-
-            for i in pos + 1..self.items.len() { // gather siblings downward
-                let len = current.path.0.len();
-                if len < min_len { break; }
-                if len == min_len { siblings_indexes.push(i); }
-            }
-
-            let sibling_count = siblings_indexes.len();
-            for i in siblings_indexes {
-                self.items[i].sibling_index = i;
-                self.items[i].sibling_count = sibling_count;
+                if pos == 0 {
+                    index_n_size.push(index);
+                    break;
+                }
+                pos -= 1;
+                if current_level == level { index += 1; }
+            } else {
+                return if self.items.is_empty() { 0.0 } else {1.0}
             }
         }
+        index_n_size.push(self.top_layouts_count);
+        debug_assert!(index_n_size.len() & 1 == 0);
+
+        let mut position = 0.0;
+        let mut valuable = 1.0;
+        while !index_n_size.is_empty() {
+            let size = index_n_size.pop().unwrap();
+            let index = index_n_size.pop().unwrap();
+
+            if size > 0 {
+                position += valuable * (index as f32 / size as f32);
+                valuable = valuable / ((size + 1) as f32);
+            }
+        }
+
+        position
     }
 
     pub fn get_parent_pos(&self, mut pos: usize) -> Option<usize> {
@@ -1366,7 +1379,10 @@ impl Layouts {
         // when a field changed, recreate layout of the parent message.
         // the field may be repeated, so delete/create it may influence siblings
         if let Some(parent_pos) = self.get_parent_pos(changed_layout) {
-            let children_count = self.get_children_count(parent_pos);
+            let children_count = self.calc_children_count(parent_pos);
+            if let Some(parent) = self.items.get_mut(parent_pos) {
+                parent.children_count = children_count;
+            }
 
             if let Some(parent) = self.items.get(parent_pos) {
                 if let Some(parent_msg) = root.get_submessage(&parent.path.0) {
@@ -1380,14 +1396,16 @@ impl Layouts {
                 }
             }
         } else { // if changed a field of the root message, rebuild all layouts
+            let sorted_fields = root.get_sorted_fields(&config.field_order);
             let mut items: Vec<LayoutParams> =
-                root.get_sorted_fields(&config.field_order).into_iter().
+                sorted_fields.into_iter().
                     map(|pos_ex| Self::create_field_layouts(root, &config, &FieldPath([pos_ex.0].into()), pos_ex.1, true)).
                     flatten().collect();
 
             for item in &mut items {
                 item.calc_sizes(root, config, self.width, &mut negotiator);
             }
+            self.top_layouts_count = Self::calc_top_layouts_count(&items);
             self.items = items;
         }
         self.indents = negotiator.into();
@@ -1402,20 +1420,20 @@ impl Layouts {
     }
     pub fn run_command(&mut self, command: UserCommand, root: &MessageData, config: &LayoutConfig, selection: &mut Selection) -> CommandResult {
         match &command {
-            UserCommand::ScrollVertically(mut delta, move_up) => {
+            UserCommand::ScrollVertically(mut delta) => {
                 if delta == 0 { return CommandResult::None; }
                 let mut from_beneath = false;
 
                 loop {
                     if let Some(current) = self.items.get(selection.layout) {
                         debug_assert!(current.layout.is_some());
-                        if !*move_up { // cursor moving down
-                            if selection.y + delta < current.height {
+                        if delta > 0 { // cursor moving down
+                            if (selection.y + delta as usize) < current.height {
                                 selection.y += delta as usize;
-                                debug_assert!(selection.y < current.height as usize);
+                                debug_assert!(selection.y < current.height);
                                 break;
                             }
-                            delta -= current.height as usize - selection.y;
+                            delta -= current.height as isize - selection.y as isize;
 
                             if selection.layout + 1 >= self.items.len() {
                                 selection.y = current.height - 1;
@@ -1427,11 +1445,11 @@ impl Layouts {
 
                             if from_beneath { selection.y = current.height - 1; }
 
-                            if selection.y >= delta {
-                                selection.y -= delta;
+                            if selection.y >= -delta as usize {
+                                selection.y -= -delta as usize;
                                 break;
                             }
-                            delta -= (selection.y + 1);
+                            delta += (selection.y + 1) as isize;
 
                             if selection.layout == 0 {
                                 selection.y = 0;
@@ -1488,6 +1506,7 @@ impl Layouts {
                         match layout.layout_type() {
                             LayoutType::Message => {
                                 let current_path = current.path.clone();
+                                let current_amount = current.amount;
                                 // there is no reason to collapse a message that does not exist, it's already displayed in one line
                                 if let Some(msg) = root.get_submessage(&current_path.0) {
                                     // remove selected layout and all nested layouts
@@ -1500,7 +1519,7 @@ impl Layouts {
                                     }
                                     self.items.drain(selection.layout + 1..end_pos);
                                     // create a collapsed layout in place of the deleted
-                                    self.items[selection.layout] = LayoutParams::new(current_path, Box::new(CollapsedLayout { display_size: msg.len() }));
+                                    self.items[selection.layout] = LayoutParams::new(current_path, current_amount, Box::new(CollapsedLayout { display_size: msg.len() }));
                                 }
                             }
                             LayoutType::Collapsed => {

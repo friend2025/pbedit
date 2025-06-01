@@ -1,6 +1,6 @@
 [package]
-name = "editor"
-version = "0.8.0"
+name = "protoedit"
+version = "0.8.1"
 edition = "2021"
 
 [dependencies]

@@ -1,10 +1,10 @@
-# pbedit
+# protoedit
 
-Òerminal-based [protobuf](https://protobuf.dev) data files editor.
+Terminal-based [protobuf](https://protobuf.dev) data files editor.
 
 ## Command Line Interface
 
-`editor data.pb;format.proto;message_name`
+`protoedit data.pb;format.proto;message_name`
 
  * data.pb - path to file in protobuf format
  * format.proto - path to .proto file with data description
@@ -41,7 +41,7 @@ In the current version, the program may slow down with files larger than 10 thou
 ## Examples
 
 There are several example data files for testing the application in the 'data' folder.
-Type `editor filename.pb` to open a file.
+Type `protoedit filename.pb` to open a file.
 
  * ints.pb - simple integer data example
  * str.pb - multiline string example

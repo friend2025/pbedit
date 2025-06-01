@@ -3,7 +3,6 @@
 mod proto;
 mod wire;
 mod typedefs;
-mod editor;
 mod view;
 mod trz;
 
@@ -194,8 +193,8 @@ impl App {
     }
     pub fn on_mouse(&mut self, event: MouseEvent) -> io::Result<bool> {
         match event.kind {
-            MouseEventKind::ScrollUp => { self.run_command(ScrollVertically(3, true))?; }
-            MouseEventKind::ScrollDown => { self.run_command(ScrollVertically(3, false))?; }
+            MouseEventKind::ScrollUp => { self.run_command(ScrollVertically(-3))?; }
+            MouseEventKind::ScrollDown => { self.run_command(ScrollVertically(3))?; }
             _ => {}
         }
         Ok(true)
@@ -222,13 +221,13 @@ impl App {
             KeyCode::Esc => return Ok(false),
             KeyCode::Enter => self.run_command(CollapsedToggle)?,
             KeyCode::Up => {
-                self.run_command(if event.modifiers.contains(KeyModifiers::CONTROL) { ScrollSibling(-1) } else { ScrollVertically(1, true) })?;
+                self.run_command(if event.modifiers.contains(KeyModifiers::CONTROL) { ScrollSibling(-1) } else { ScrollVertically(-1) })?;
             }
             KeyCode::Down => {
-                self.run_command(if event.modifiers.contains(KeyModifiers::CONTROL) { ScrollSibling(1) } else { ScrollVertically(1, false) })?;
+                self.run_command(if event.modifiers.contains(KeyModifiers::CONTROL) { ScrollSibling(1) } else { ScrollVertically(1) })?;
             }
-            KeyCode::PageUp => { self.run_command(ScrollVertically((self.height - TOP_LINE - 1) as usize, true))?; }
-            KeyCode::PageDown => { self.run_command(ScrollVertically((self.height - TOP_LINE - 1) as usize, false))?; }
+            KeyCode::PageUp => { self.run_command(ScrollVertically(-((self.height - TOP_LINE - 1) as isize)))?; }
+            KeyCode::PageDown => { self.run_command(ScrollVertically((self.height - TOP_LINE - 1) as isize))?; }
             KeyCode::Home => if event.modifiers.contains(KeyModifiers::CONTROL) {
                 self.selected = Selection::default();
                 self.need_update = true;
@@ -247,18 +246,18 @@ impl App {
     fn run_command(&mut self, command: UserCommand) -> io::Result<()> {
         let result =
             match command {
-                UserCommand::ChangeFieldOrder(order) => {
+                ChangeFieldOrder(order) => {
                     self.layout_config.field_order = order;
                     self.selected = Selection::default();
                     self.need_update_layout_height = true;
                     self.layouts = Layouts::new(&self.data, &self.layout_config, self.layouts.file_name.clone(), self.layouts.width, self.layouts.height);
                     CommandResult::Redraw
                 }
-                UserCommand::ScrollVertically(delta, move_up) => {
-                    if move_up {
-                        self.layouts.ensure_loaded(&self.data, &self.layout_config, self.selected.layout, delta + 1 + self.height as usize, 0, &mut self.selected);
+                ScrollVertically(delta) => {
+                    if delta < 0 {
+                        self.layouts.ensure_loaded(&self.data, &self.layout_config, self.selected.layout, -delta as usize + 1 + self.height as usize, 0, &mut self.selected);
                     } else {
-                        self.layouts.ensure_loaded(&self.data, &self.layout_config, self.selected.layout, 0, delta + 1, &mut self.selected);
+                        self.layouts.ensure_loaded(&self.data, &self.layout_config, self.selected.layout, 0, delta as usize + 1, &mut self.selected);
                     }
                     self.layouts.run_command(command, &self.data, &self.layout_config, &mut self.selected)
                 }
@@ -283,32 +282,15 @@ impl App {
         }
         Ok(())
     }
-
-    fn get_position_percent(&self, mut layout_index: usize) -> f32 {
-        let mut res = 0.0;
-        loop {
-            if let Some(layout) = self.layouts.items.get(layout_index) {
-                res = res / layout.sibling_count as f32;
-                let share = layout.sibling_index as f32 / layout.sibling_count as f32;
-                res = res + share;
-            }
-
-            if let Some(index) = self.layouts.get_parent_pos(layout_index) {
-                layout_index = index;
-            } else {
-                break;
-            }
-        }
-        res
-    }
     fn get_top_line(&self, width: u16, config: &LayoutConfig) -> String {
         let mut parts = Vec::with_capacity(3);
 
         parts.push(self.layouts.file_name.clone());
         if let Some(current) = self.layouts.items.get(self.selected.layout) {
             debug_assert!(current.layout.is_some());
+            let percent = 100.0 * self.layouts.calc_relative_pos(self.selected.layout);
             parts.push(current.get_status_string(self.selected.x, self.selected.y));
-            parts.push(format!("{}/{} |{}", current.sibling_index, current.sibling_count, config.field_order.first_letter()));
+            parts.push(format!("{:.0}% {}", percent, config.field_order.first_letter()));
         }
 
         loop {
@@ -454,7 +436,9 @@ impl App {
         }
         if y < self.height { // fill the free space below if any
             self.stdout.queue(style::ResetColor)?;
-            self.stdout.execute(terminal::Clear(terminal::ClearType::FromCursorDown))?;
+            // ?           self.stdout.execute(terminal::Clear(terminal::ClearType::FromCursorDown))?;
+
+            self.stdout.queue(terminal::Clear(terminal::ClearType::FromCursorDown))?;
         }
         self.stdout.flush()
     }
@@ -502,18 +486,31 @@ impl Drop for App {
     }
 }
 
+fn exit_with_error<T: std::fmt::Display>(message: T, code: i32) {
+    let _ = io::stderr().execute(style::SetForegroundColor(Color::Red));
+    eprint!("error");
+    let _ = io::stderr().execute(style::ResetColor);
+    eprintln!(": {}", message);
+    exit(code);
+}
+
 
 /// Protobuf editor
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(
+    version,
+    about,
+    long_about = "\nTerminal-based protobuf data files editor.\nhttps://github.com/friend2025/protoedit"
+)]
 struct Args {
     /// Input file: data.pb{;format.proto{;message_name}}
     file: String,
 
     /// Set of directories for proto files search
-    #[arg(short='I', long="proto_path")]
+    #[arg(short = 'I', long = "proto_path")]
     proto_path: Vec<PathBuf>,
 }
+
 
 fn main() -> io::Result<()> {
     let args = Args::parse();
@@ -536,12 +533,10 @@ fn main() -> io::Result<()> {
     }
 
     if !std::fs::exists(&binary_file)? {
-        eprintln!("Data file \"{}\" is not available", binary_file);
-        exit(101);
+        exit_with_error(format!("file \"{}\" is not available", binary_file), 101);
     }
     if !std::fs::exists(&proto_file)? {
-        eprintln!("Proto definitions file \"{}\" is not available.", proto_file);
-        exit(102);
+        exit_with_error(format!("proto definitions file \"{}\" is not available", proto_file), 102);
     }
 
     for dir in &args.proto_path {
@@ -562,8 +557,7 @@ fn main() -> io::Result<()> {
     if root_message_name.is_empty() {
         root_msg = proto.auto_detect_root_message(); // search only in the main proto file
         if root_msg.is_none() {
-            eprintln!("Cannot choose the root message in the proto definition file; please provide it manually.");
-            exit(103);
+            exit_with_error("cannot choose the root message in the proto definition file; please provide it manually", 103);
         }
     }
 
@@ -576,8 +570,7 @@ fn main() -> io::Result<()> {
     if root_msg.is_none() {
         root_msg = proto.get_message_definition(&root_message_name);
         if root_msg.is_none() {
-            eprintln!("Root message \"{}\" not found.", root_message_name);
-            exit(104);
+            exit_with_error(format!("root message \"{}\" not found", root_message_name), 104);
         }
     }
 
@@ -664,34 +657,6 @@ mod app_tests {
         MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap()
     }
 
-    fn make_one_field_data(proto: &str, value: ScalarValue) -> MessageData {
-        //let binary_input = [];
-        //let proto = ProtoData::new(proto).unwrap();
-        //let mut limit = binary_input.len() as u32;
-        //let root_msg = proto.auto_detect_root_message().unwrap();
-        //let mut read = PbReader::new(binary_input.as_slice());
-        //let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
-
-        let mut data = make_no_field_data(proto);
-
-        let mut field = data.add_field(&[(1, 0).into()]).unwrap();
-        field.value = FieldValue::SCALAR(value);
-
-        data
-    }
-
-    fn make_no_field_data(proto: &str) -> MessageData {
-        let binary_input = [];
-        let proto = ProtoData::new(proto).unwrap().finalize().unwrap();
-        let mut limit = binary_input.len() as u32;
-        let root_msg = proto.auto_detect_root_message().unwrap();
-        let mut read = PbReader::new(binary_input.as_slice());
-        let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
-
-        data
-    }
-
-
     fn make_test_data_1() -> MessageData {
         let proto_str = r#"
 message M { int32 f1 = 1; repeated int32 f2 = 2; M3 m3 = 3; int32 f4 = 4; }
@@ -727,10 +692,26 @@ message M6 { int32 f8 = 8; int32 f9 = 9; }
         //        f.write_all(binary_input.as_slice()).unwrap();
 
         MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap()
-        //assert_eq!(crate::view::MARGIN_LEFT, 1);
-        //assert_eq!(crate::view::MARGIN_RIGHT, 1);
     }
 
+    fn make_no_field_data(proto: &str) -> MessageData {
+        let binary_input = [];
+        let proto = ProtoData::new(proto).unwrap().finalize().unwrap();
+        let mut limit = binary_input.len() as u32;
+        let root_msg = proto.auto_detect_root_message().unwrap();
+        let mut read = PbReader::new(binary_input.as_slice());
+        let mut data = MessageData::new(&mut read, &proto, root_msg, &mut limit).unwrap();
+
+        data
+    }
+
+    fn make_one_field_data(proto: &str, value: ScalarValue) -> MessageData {
+        let mut data = make_no_field_data(proto);
+        let mut field = data.add_field(&[(1, 0).into()]).unwrap();
+        field.value = FieldValue::SCALAR(value);
+
+        data
+    }
 
     fn make_repeated_message_data(messages_count: usize) -> MessageData {
         let proto_str = r#"
@@ -775,6 +756,12 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
         data
     }
 
+    #[test]
+    fn match_testing_requirements() {
+        // these settings values required for correct test data formating
+        assert_eq!(MARGIN_LEFT, 1);
+        assert_eq!(MARGIN_RIGHT, 1);
+    }
 
     #[test]
     fn simple() {
@@ -818,13 +805,13 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
         assert_eq!(app.to_strings(), expected_start);
 
         for _ in 0..100 {
-            app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+            app.run_command(UserCommand::ScrollVertically(1)).unwrap();
             app.after_event().unwrap();
         }
         assert_eq!(app.to_strings(), expected_end);
 
         for _ in 0..100 {
-            app.run_command(UserCommand::ScrollVertically(1, true)).unwrap();
+            app.run_command(UserCommand::ScrollVertically(-1)).unwrap();
             app.after_event().unwrap();
         }
         assert_eq!(app.to_strings(), expected_start);
@@ -841,11 +828,11 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
         }
         assert_eq!(app.to_strings(), expected_start);
 
-        app.run_command(UserCommand::ScrollVertically(100, false)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(100)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected_end);
 
-        app.run_command(UserCommand::ScrollVertically(100, true)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(-100)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected_start);
     }
@@ -878,7 +865,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
         let mut app = App::for_tests(data, FieldOrder::Proto, 30, 25).unwrap();
         app.to_strings();
 
-        app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
         app.run_command(UserCommand::DeleteData).unwrap();
         app.after_event().unwrap();
@@ -999,19 +986,19 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             "  3: 33             "];
         assert_eq!(app.to_strings(), expected0);
 
-        app.run_command(ScrollVertically(1, false)).unwrap();
+        app.run_command(ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected0);
 
-        app.run_command(ScrollVertically(1, false)).unwrap();
+        app.run_command(ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected1);
 
-        app.run_command(ScrollVertically(1, true)).unwrap();
+        app.run_command(ScrollVertically(-1)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected1);
 
-        app.run_command(ScrollVertically(1, true)).unwrap();
+        app.run_command(ScrollVertically(-1)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected0);
     }
@@ -1123,7 +1110,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             let data = make_one_field_data("message M { bytes f1=1; }", BYTES(bytes));
             let mut app = App::for_tests(data, FieldOrder::Proto, 30, 25).unwrap();
             app.to_strings();
-            app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+            app.run_command(UserCommand::ScrollVertically(1)).unwrap();
             app.after_event().unwrap();
             app.to_strings();
             app.run_command(UserCommand::DeleteData).unwrap();
@@ -1202,7 +1189,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             app.run_command(UserCommand::ScrollHorizontally(1)).unwrap();
             app.after_event().unwrap();
             app.to_strings();
-            app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+            app.run_command(UserCommand::ScrollVertically(1)).unwrap();
             app.after_event().unwrap();
             app.to_strings();
             app.run_command(UserCommand::DeleteData).unwrap();
@@ -1257,7 +1244,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
         let mut app = App::for_tests(data, FieldOrder::Proto, 50, 25).unwrap();
 
         app.to_strings();
-        app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
 
         app.run_command(UserCommand::CollapsedToggle).unwrap();
@@ -1285,7 +1272,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
         let mut app = App::for_tests(data, FieldOrder::Proto, 50, 25).unwrap();
 
         app.to_strings();
-        app.run_command(UserCommand::ScrollVertically(2, false)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(2)).unwrap();
         app.after_event().unwrap();
 
 
@@ -1336,7 +1323,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             " f3: 3                                      int32 "];
         assert_eq!(app.to_strings(), expected);
 
-        app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
         app.run_command(UserCommand::DeleteData).unwrap();
         app.after_event().unwrap();
@@ -1346,7 +1333,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             " f3: 3                                      int32 "];
         assert_eq!(app.to_strings(), expected);
 
-        app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
         app.run_command(UserCommand::DeleteData).unwrap();
         app.after_event().unwrap();
@@ -1374,7 +1361,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             " f3: 3                  int32 "];
         assert_eq!(app.to_strings(), expected);
 
-        app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
         app.run_command(UserCommand::DeleteData).unwrap();
         app.after_event().unwrap();
@@ -1383,7 +1370,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             " f3: 3                  int32 "];
         assert_eq!(app.to_strings(), expected);
 
-        app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
         app.run_command(UserCommand::DeleteData).unwrap();
         app.after_event().unwrap();
@@ -1451,7 +1438,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
     fn delete_repeated_int() {
         let mut app = make_repeated_int_data();
 
-        app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
         app.run_command(UserCommand::ScrollHorizontally(1)).unwrap();
         app.after_event().unwrap();
@@ -1500,7 +1487,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             let mut app = make_repeated_int_data();
 
             for _ in 0..scroll_y {
-                app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+                app.run_command(UserCommand::ScrollVertically(1)).unwrap();
                 app.after_event().unwrap();
             }
             for _ in 0..scroll_x {
@@ -1742,15 +1729,15 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             "   i3: 3      int32 "];
         assert_eq!(app.to_strings(), expected0);
 
-        app.run_command(ScrollVertically(1, false)).unwrap(); // next line
+        app.run_command(ScrollVertically(1)).unwrap(); // next line
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected0);
 
-        app.run_command(ScrollVertically(1, false)).unwrap();
+        app.run_command(ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected0);
 
-        app.run_command(ScrollVertically(1, false)).unwrap(); // scroll one line down
+        app.run_command(ScrollVertically(1)).unwrap(); // scroll one line down
         app.after_event().unwrap();
         let expected1 = [
             "   i2: 2      int32 ",
@@ -1758,19 +1745,19 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             " m1:            M2* "];
         assert_eq!(app.to_strings(), expected1);
 
-        app.run_command(ScrollVertically(1, true)).unwrap();
+        app.run_command(ScrollVertically(-1)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected1);
 
-        app.run_command(ScrollVertically(1, true)).unwrap();
+        app.run_command(ScrollVertically(-1)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected1);
 
-        app.run_command(ScrollVertically(1, true)).unwrap(); // scroll one line up
+        app.run_command(ScrollVertically(-1)).unwrap(); // scroll one line up
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected0);
 
-        app.run_command(ScrollVertically(99, false)).unwrap(); // scroll to end
+        app.run_command(ScrollVertically(99)).unwrap(); // scroll to end
         app.after_event().unwrap();
         let expected_end = [
             " m1:            M2* ",
@@ -1778,15 +1765,15 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             "   i3: 7      int32 "];
         assert_eq!(app.to_strings(), expected_end);
 
-        app.run_command(ScrollVertically(1, false)).unwrap();
+        app.run_command(ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected_end);
 
-        app.run_command(ScrollVertically(99, true)).unwrap(); // scroll to start
+        app.run_command(ScrollVertically(-99)).unwrap(); // scroll to start
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected0);
 
-        app.run_command(ScrollVertically(1, true)).unwrap();
+        app.run_command(ScrollVertically(-1)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), expected0);
     }
@@ -1811,7 +1798,7 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
             "   i3: 21     int32 "];
         assert_eq!(app.to_strings(), expected_end);
 
-        app.run_command(ScrollVertically(3, true)).unwrap(); // scroll up
+        app.run_command(ScrollVertically(-3)).unwrap(); // scroll up
         app.after_event().unwrap();
 
         let expected_end = [
@@ -1826,10 +1813,10 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
         let mut data = make_no_field_data("message M { string f1=1; }");
         let mut app = App::for_tests(data, FieldOrder::Wire, 30, 25).unwrap();
         app.to_strings();
-        app.run_command(UserCommand::ScrollVertically(1, true)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(-1)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), Vec::<String>::new());
-        app.run_command(UserCommand::ScrollVertically(1, false)).unwrap();
+        app.run_command(UserCommand::ScrollVertically(1)).unwrap();
         app.after_event().unwrap();
         assert_eq!(app.to_strings(), Vec::<String>::new());
         app.run_command(UserCommand::ScrollSibling(1)).unwrap();
@@ -1873,32 +1860,162 @@ message M2 { int32 i2 = 2; int32 i3 = 3; }
         assert_eq!(app.to_strings(), expected_start);
     }
 
+    #[test]
+    fn layout_percent() {
+        let data = make_test_data_1();
+        let mut app = App::for_tests(data, FieldOrder::Proto, 20, 25).unwrap();
 
-    //    #[test]
-    //    fn make_test_data_file() {
-    //        let proto_str = "message M { string s1=1; }";
-    //        let mut data = make_no_field_data(proto_str);
-    //        let proto = ProtoData::new(proto_str).unwrap();
-    //        let mut field = data.add_field(&[(1, 0).into()]).unwrap();
-    //        field.value = SCALAR(STR("Leonardo's Life and Times\nLeonardo was, first of all, a painter and an artist.\nBut he was also a great thinker.".to_string()));
-    //        let mut f = std::fs::File::create("str.pb").unwrap();
-    //        data.write(&mut f, &proto, proto.root_message()).unwrap();
+        let data = make_test_data_1();
+        let mut app = App::for_tests(data, FieldOrder::Proto, 50, 25).unwrap();
+        let expected = [                                   // children count
+            " f1: 1                                      int32 ",   // 0
+            " f2: 20 21                                 int32* ",   // 0
+            " m3:                                           M3 ",   // 4
+            "   f5: 5                                    int32 ",   // 0
+            "   m6:                                        M6* ",   // 2
+            "     f8: 8                                  int32 ",   // 0
+            "     f9: 9                                  int32 ",   // 0
+            "   m6:                                        M6* ",   // 2
+            "     f8: 10                                 int32 ",   // 0
+            "     f9: 11                                 int32 ",   // 0
+            "   f7: 7                                    int32 ",   // 0
+            " f4: 0                                     -int32 "];  // 0
+        assert_eq!(app.to_strings(), expected);
 
-    //        let proto_str = "message M { bytes b1=1; }";
-    //        let mut data = make_no_field_data(proto_str);
-    //        let proto = ProtoData::new(proto_str).unwrap();
-    //        let mut field = data.add_field(&[(1, 0).into()]).unwrap();
-    //        let data_vec = (0..1000u64).into_iter().map(|n|((n*8902374+59036783)&0xff) as u8).collect();
-    //        field.value = SCALAR(BYTES(data_vec));
-    //        let mut f = std::fs::File::create("bytes.pb").unwrap();
-    //        data.write(&mut f, &proto, proto.root_message()).unwrap();
-    //
-    //    }
+        assert_eq!(app.layouts.items.len(), 12);
+        assert_eq!(app.layouts.calc_relative_pos(0), 0.0);
+        assert_eq!(app.layouts.calc_relative_pos(1), 0.25);
+        assert_eq!(app.layouts.calc_relative_pos(2), 0.5);
+        assert_eq!(app.layouts.calc_relative_pos(3), 0.55);
+        assert_eq!(app.layouts.calc_relative_pos(4), 0.6);
+        assert_eq!(app.layouts.calc_relative_pos(7), 0.65);
+        assert_eq!(app.layouts.calc_relative_pos(10), 0.7);
+        assert_eq!(app.layouts.calc_relative_pos(11), 0.75);
+        assert_eq!(app.layouts.items[0].children_count, 0);
+        assert_eq!(app.layouts.items[1].children_count, 0);
+        assert_eq!(app.layouts.items[2].children_count, 4);
+        assert_eq!(app.layouts.items[3].children_count, 0);
+        assert_eq!(app.layouts.items[4].children_count, 2);
+        assert_eq!(app.layouts.items[5].children_count, 0);
+        assert_eq!(app.layouts.items[6].children_count, 0);
+        assert_eq!(app.layouts.items[7].children_count, 2);
+        assert_eq!(app.layouts.items[8].children_count, 0);
+        assert_eq!(app.layouts.items[9].children_count, 0);
+        assert_eq!(app.layouts.items[10].children_count, 0);
+        assert_eq!(app.layouts.items[11].children_count, 0);
+    }
 
+    #[test]
+    fn layout_percent_after_expand() {
+        let data = make_test_data_1();
+        let mut app = App::for_tests(data, FieldOrder::Proto, 30, 25).unwrap();
+
+        app.to_strings();
+        app.run_command(UserCommand::ScrollVertically(2)).unwrap();
+        app.after_event().unwrap();
+        app.run_command(UserCommand::CollapsedToggle).unwrap();
+        app.after_event().unwrap();
+
+        let expected = [
+            " f1: 1                  int32 ",   // 0
+            " f2: 20 21             int32* ",   // 0
+            " m3: ... 14                M3 ",   // 4
+            " f4: 0                 -int32 "];  // 0
+        assert_eq!(app.to_strings(), expected);
+
+        assert_eq!(app.layouts.items.len(), 4);
+        assert_eq!(app.layouts.items[0].children_count, 0);
+        assert_eq!(app.layouts.items[1].children_count, 0);
+        assert_eq!(app.layouts.items[2].children_count, 0);
+        assert_eq!(app.layouts.items[3].children_count, 0);
+        assert_eq!(app.layouts.calc_relative_pos(0), 0.0);
+        assert_eq!(app.layouts.calc_relative_pos(1), 0.25);
+        assert_eq!(app.layouts.calc_relative_pos(2), 0.5);
+        assert_eq!(app.layouts.calc_relative_pos(3), 0.75);
+
+
+        app.run_command(UserCommand::CollapsedToggle).unwrap();
+        app.after_event().unwrap();
+
+        let expected = [
+            " f1: 1                  int32 ",   // 0
+            " f2: 20 21             int32* ",   // 0
+            " m3:                       M3 ",   // 4
+            "   f5: 5                int32 ",   // 0
+            "   m6:                    M6* ",   // 2
+            "     f8: 8              int32 ",   // 0
+            "     f9: 9              int32 ",   // 0
+            "   m6:                    M6* ",   // 2
+            "     f8: 10             int32 ",   // 0
+            "     f9: 11             int32 ",   // 0
+            "   f7: 7                int32 ",   // 0
+            " f4: 0                 -int32 "];  // 0
+        assert_eq!(app.to_strings(), expected);
+
+        assert_eq!(app.layouts.items.len(), 12);
+        assert_eq!(app.layouts.items[0].children_count, 0);
+        assert_eq!(app.layouts.items[1].children_count, 0);
+        assert_eq!(app.layouts.items[2].children_count, 4);
+        assert_eq!(app.layouts.items[3].children_count, 0);
+        assert_eq!(app.layouts.items[4].children_count, 2);
+        assert_eq!(app.layouts.items[5].children_count, 0);
+        assert_eq!(app.layouts.items[6].children_count, 0);
+        assert_eq!(app.layouts.items[7].children_count, 2);
+        assert_eq!(app.layouts.items[8].children_count, 0);
+        assert_eq!(app.layouts.items[9].children_count, 0);
+        assert_eq!(app.layouts.items[10].children_count, 0);
+        assert_eq!(app.layouts.items[11].children_count, 0);
+        assert_eq!(app.layouts.calc_relative_pos(7), 0.65);
+        assert_eq!(app.layouts.calc_relative_pos(10), 0.7);
+        assert_eq!(app.layouts.calc_relative_pos(11), 0.75);
+    }
+
+    #[test]
+    fn layout_percent_after_data_change() {
+        let mut data = make_repeated_message_data(0);
+        let mut app = App::for_tests(data, FieldOrder::Proto, 30, 25).unwrap();
+        assert_eq!(app.to_strings(), [" m1:                     -M2* "]);
+
+        app.run_command(UserCommand::InsertData).unwrap();
+        app.after_event().unwrap();
+
+        app.run_command(UserCommand::InsertData).unwrap();
+        app.after_event().unwrap();
+
+        let expected = [
+            " m1:                      M2* ",
+            "   i2: 0               -int32 ",
+            "   i3: 0               -int32 ",
+            " m1:                      M2* ",
+            "   i2: 0               -int32 ",
+            "   i3: 0               -int32 "];
+        assert_eq!(app.to_strings(), expected);
+
+        assert_eq!(app.layouts.items.len(), 6);
+        assert_eq!(app.layouts.items[0].children_count, 2);
+        assert_eq!(app.layouts.items[1].children_count, 0);
+        assert_eq!(app.layouts.items[3].children_count, 2);
+        assert_eq!(app.layouts.calc_relative_pos(0), 0.0);
+        assert_eq!(app.layouts.calc_relative_pos(3), 0.5);
+        assert_eq!(app.layouts.calc_relative_pos(4), 2.0 / 3.0);
+
+        app.run_command(UserCommand::DeleteData).unwrap();
+        app.after_event().unwrap();
+        let expected = [
+            " m1:                      M2* ",
+            "   i2: 0               -int32 ",
+            "   i3: 0               -int32 "];
+        assert_eq!(app.to_strings(), expected);
+
+        assert_eq!(app.layouts.items.len(), 3);
+        assert_eq!(app.layouts.items[0].children_count, 2);
+        assert_eq!(app.layouts.items[1].children_count, 0);
+        assert_eq!(app.layouts.items[2].children_count, 0);
+        assert_eq!(app.layouts.calc_relative_pos(0), 0.0);
+        assert_eq!(app.layouts.calc_relative_pos(1), 0.25);
+        assert_eq!(app.layouts.calc_relative_pos(2), 0.5);
+    }
 
     // TODO unknown field layout
-    // TODO delete a field of a submesage
-
-    // if user start typing when a scalar value selected, the old values will be discarded and replaced by the new
-    // if user press Enter when a scalar value selected it starts editing of the current value
+    // TODO delete a field of a submessage
 }
